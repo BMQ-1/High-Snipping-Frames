@@ -1,0 +1,40 @@
+<svg viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background Plate (G3 Squircle) -->
+  <rect width="512" height="512" rx="112" fill="url(#core-bg)" />
+  <rect width="510" height="510" x="1" y="1" rx="111" stroke="#FFFFFF" stroke-opacity="0.08" stroke-width="2" />
+  
+  <!-- Bottom-Right Anchor Bracket (The Smirk / Smile) -->
+  <path d="M 392 248 L 392 368 C 392 381.25 381.25 392 368 392 L 248 392 L 248 344 L 344 344 L 344 248 Z" fill="url(#core-accent)" />
+
+  <!-- Top-Left Crop Bracket (The Brow / Wink) -->
+  <path d="M 120 264 L 120 144 C 120 130.75 130.75 120 144 120 L 264 120 L 264 168 L 168 168 L 168 264 Z" fill="url(#core-silver)" />
+
+  <!-- MODERN OPTICAL SENSOR EYE (Top-Right Eye) -->
+  <!-- Concentric Calibration Ring -->
+  <circle cx="344" cy="168" r="34" stroke="#38BDF8" stroke-width="4" stroke-opacity="0.35" />
+  <!-- Active Lens Core -->
+  <circle cx="344" cy="168" r="22" fill="#38BDF8" />
+  <!-- Specular Optical Catchlight -->
+  <circle cx="350" cy="162" r="5" fill="#FFFFFF" />
+
+  <!-- ANCHOR TRACKING DOT (Bottom-Left Calibration) -->
+  <circle cx="168" cy="344" r="34" stroke="#38BDF8" stroke-width="4" stroke-opacity="0.2" />
+  <circle cx="168" cy="344" r="22" fill="#0284C7" />
+  <circle cx="174" cy="338" r="4" fill="#FFFFFF" fill-opacity="0.8" />
+
+  <!-- GRADIENTS -->
+  <defs>
+    <linearGradient id="core-bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#141720" />
+      <stop offset="100%" stop-color="#07080B" />
+    </linearGradient>
+    <linearGradient id="core-silver" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="100%" stop-color="#94A3B8" />
+    </linearGradient>
+    <linearGradient id="core-accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0078D4" />
+      <stop offset="100%" stop-color="#004C87" />
+    </linearGradient>
+  </defs>
+</svg>
