@@ -38,26 +38,44 @@ static void Log(const char* fmt, ...) {
     }
 }
 
-// Detect refresh rate of primary display
+static HMODULE g_hMod = NULL;
+
+// Detect highest refresh rate among all active displays
 static UINT32 DetectPrimaryRefreshRate() {
-    DEVMODEW dm;
-    ZeroMemory(&dm, sizeof(dm));
-    dm.dmSize = sizeof(dm);
-    if (EnumDisplaySettingsW(NULL, ENUM_CURRENT_SETTINGS, &dm)) {
-        if (dm.dmDisplayFrequency >= 30 && dm.dmDisplayFrequency <= 360) {
-            return (UINT32)dm.dmDisplayFrequency;
+    UINT32 maxFreq = 60;
+    DISPLAY_DEVICEW dd;
+    ZeroMemory(&dd, sizeof(dd));
+    dd.cb = sizeof(dd);
+
+    for (DWORD devNum = 0; EnumDisplayDevicesW(NULL, devNum, &dd, 0); devNum++) {
+        if (!(dd.StateFlags & DISPLAY_DEVICE_ACTIVE)) continue;
+        DEVMODEW dm;
+        ZeroMemory(&dm, sizeof(dm));
+        dm.dmSize = sizeof(dm);
+        if (EnumDisplaySettingsW(dd.DeviceName, ENUM_CURRENT_SETTINGS, &dm)) {
+            if (dm.dmDisplayFrequency > maxFreq && dm.dmDisplayFrequency <= 500) {
+                maxFreq = dm.dmDisplayFrequency;
+            }
         }
     }
-    return 144;
+    return (maxFreq >= 60) ? maxFreq : 144;
 }
 
-// Load INI configuration
+// Load INI configuration dynamically
 static void LoadConfig(HMODULE hMod) {
-    WCHAR iniPath[MAX_PATH];
-    GetModuleFileNameW(hMod, iniPath, MAX_PATH);
-    WCHAR* dot = wcsrchr(iniPath, L'.');
-    if (dot) wcscpy(dot, L".ini");
+    if (hMod) g_hMod = hMod;
+    if (!hMod) hMod = g_hMod;
 
+    WCHAR iniPath[MAX_PATH] = { 0 };
+    if (hMod) {
+        GetModuleFileNameW(hMod, iniPath, MAX_PATH);
+        WCHAR* dot = wcsrchr(iniPath, L'.');
+        if (dot) wcscpy(dot, L".ini");
+    }
+
+    if (GetFileAttributesW(iniPath) == INVALID_FILE_ATTRIBUTES) {
+        wcscpy(iniPath, L"C:\\Program Files\\SnippingToolHighFPS\\SnippingToolHighFPS.ini");
+    }
     if (GetFileAttributesW(iniPath) == INVALID_FILE_ATTRIBUTES) {
         wcscpy(iniPath, L"C:\\AntiGravity\\PC Tool\\Snipping Tool high FPS\\bin\\SnippingToolHighFPS.ini");
     }
@@ -71,7 +89,7 @@ static void LoadConfig(HMODULE hMod) {
     int configuredFps = GetPrivateProfileIntW(L"Settings", L"TargetFPS", 0, iniPath);
     if (configuredFps <= 0) {
         g_TargetFPS = DetectPrimaryRefreshRate();
-        Log("[SnippingToolHighFPS] TargetFPS set to Auto (detected monitor refresh: %u Hz)", g_TargetFPS);
+        Log("[SnippingToolHighFPS] TargetFPS set to Auto (detected display refresh: %u Hz)", g_TargetFPS);
     } else {
         g_TargetFPS = (UINT32)configuredFps;
         Log("[SnippingToolHighFPS] TargetFPS loaded from INI: %u FPS", g_TargetFPS);
@@ -120,7 +138,10 @@ extern "C" __declspec(dllexport) HRESULT StartCaptureHook(void* pWrapper) {
     void* pSession = *pObj;
     if (!pSession) return S_OK;
 
-    Log("[SnippingToolHighFPS] StartCaptureHook triggered on session 0x%p", pSession);
+    // Reload config so any recent GUI/INI adjustments take effect immediately
+    LoadConfig(g_hMod);
+
+    Log("[SnippingToolHighFPS] StartCaptureHook triggered on session 0x%p (Target: %u FPS)", pSession, g_TargetFPS);
 
     // 1. Unlock compositor to TargetFPS
     UnlockCaptureSession(pSession);
@@ -135,6 +156,9 @@ extern "C" __declspec(dllexport) HRESULT StartCaptureHook(void* pWrapper) {
 
 // Global replacement for SnippingTool IMediaRatio frame rate query
 extern "C" __declspec(dllexport) UINT32 MediaRatioHook(void** ppRatio) {
+    // Reload config so any recent GUI/INI adjustments take effect immediately
+    LoadConfig(g_hMod);
+
     if (!ppRatio || !*ppRatio) {
         Log("[SnippingToolHighFPS] MediaRatioHook: NULL ratio pointer, returning %u", g_TargetFPS);
         return g_TargetFPS;
