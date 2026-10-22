@@ -43,7 +43,7 @@ using namespace Gdiplus;
 #endif
 
 // Base logical design resolution (100% zoom)
-const int BASE_WIDTH  = 540;
+const int BASE_WIDTH  = 520;
 const int BASE_HEIGHT = 580;
 
 // Global application state
@@ -55,16 +55,11 @@ static WCHAR g_IniPath[MAX_PATH] = { 0 };
 
 static UINT32 g_CurrentFPS = 144;
 static int    g_QualityLevel = 1; // 0=Balanced, 1=High, 2=Ultra
-static float  g_ZoomFactor = 1.0f; // Zoom: 0.75f - 2.5f
+static float  g_ZoomFactor = 1.0f; // Zoom: 0.8f - 2.0f
 static BOOL   g_AutoStart = TRUE;
+static DWORD  g_LastSavedTick = 0; // For temporary "✓ Saved" toast animation
 
-// Hit test areas (in base logical coordinates)
-struct ClickableRect {
-    RectF rc;
-    int   id;
-    int   data;
-};
-
+// Hit test IDs (in base logical coordinates)
 #define HIT_NONE           0
 #define HIT_FPS_PRESET     1
 #define HIT_QUALITY_PRESET 2
@@ -72,8 +67,9 @@ struct ClickableRect {
 #define HIT_BTN_RECORD     4
 #define HIT_BTN_FOLDER     5
 #define HIT_BTN_ANALYZE    6
-#define HIT_BTN_MINIMIZE   7
-#define HIT_BTN_APPLY      8
+#define HIT_ZOOM_MINUS     7
+#define HIT_ZOOM_PLUS      8
+#define HIT_ZOOM_RESET     9
 
 static int g_HoveredHitId = HIT_NONE;
 static int g_HoveredData = -1;
@@ -85,7 +81,7 @@ static const int g_NumFpsOptions   = 7;
 
 // Quality presets
 static const WCHAR* g_QualityLabels[] = { L"Balanced (1.0x)", L"High Quality (1.5x)", L"Ultra Gaming (2.0x)" };
-static const WCHAR* g_QualityDescs[]  = { L"Standard bitrates", L"Crisp motion", L"Zero compression artifacts" };
+static const WCHAR* g_QualityDescs[]  = { L"Standard bitrates, smaller file size", L"Crisp high-framerate action", L"Lossless-like fidelity for 144+ FPS" };
 static const int g_NumQualityOptions = 3;
 
 // Helper: Locate INI Path
@@ -184,9 +180,8 @@ static void LoadSettings() {
     g_QualityLevel = GetPrivateProfileIntW(L"Settings", L"BitrateMultiplier", 1, g_IniPath);
     if (g_QualityLevel > 2) g_QualityLevel = 1;
 
-    // Load Zoom Factor (defaults to 1.0)
     int zoomPercent = GetPrivateProfileIntW(L"GUI", L"ZoomPercent", 100, g_IniPath);
-    if (zoomPercent >= 75 && zoomPercent <= 250) {
+    if (zoomPercent >= 80 && zoomPercent <= 200) {
         g_ZoomFactor = (float)zoomPercent / 100.0f;
     }
     g_AutoStart = IsAutoStartEnabled();
@@ -208,6 +203,7 @@ static void SaveSettings() {
     WritePrivateProfileStringW(L"GUI", L"ZoomPercent", zoomStr, g_IniPath);
 
     SetAutoStart(g_AutoStart);
+    g_LastSavedTick = GetTickCount();
 
     // Update Tray Tooltip
     if (g_CurrentFPS == 0) {
@@ -263,7 +259,7 @@ static void AnalyzeLatestRecording(HWND hWnd) {
     WIN32_FIND_DATAW wfd;
     HANDLE hFind = FindFirstFileW(searchPath, &wfd);
     if (hFind == INVALID_HANDLE_VALUE) {
-        MessageBoxW(hWnd, L"No video recordings found in Videos\\Screen Recordings.\nRecord a video with Snipping Tool first!",
+        MessageBoxW(hWnd, L"No recordings found in Videos\\Screen Recordings.\nRecord a video with Snipping Tool first!",
                     L"High Snipping Frames", MB_ICONINFORMATION);
         return;
     }
@@ -307,13 +303,13 @@ static void AnalyzeLatestRecording(HWND hWnd) {
     } else {
         CloseHandle(hWrite);
         CloseHandle(hRead);
-        MessageBoxW(hWnd, L"Could not execute ffprobe. Make sure ffprobe is available in PATH.", L"Analysis", MB_ICONWARNING);
+        MessageBoxW(hWnd, L"Could not execute ffprobe. Make sure ffprobe is available.", L"Analysis", MB_ICONWARNING);
         return;
     }
 
     WCHAR msg[4096];
     WCHAR* pShortName = wcsrchr(latestFile, L'\\');
-    swprintf(msg, 4096, L"Latest Video File:\n%s\n\nVerified Stream Analysis:\n%hs",
+    swprintf(msg, 4096, L"Latest Video:\n%s\n\nVerified Stream Analysis:\n%hs",
              (pShortName ? pShortName + 1 : latestFile), buffer);
     MessageBoxW(hWnd, msg, L"High Snipping Frames - Video Verification", MB_ICONINFORMATION);
 }
@@ -353,41 +349,42 @@ static void RenderUI(Graphics& g, int clientWidth, int clientHeight) {
     // Apply active Zoom transformation
     g.ScaleTransform(g_ZoomFactor, g_ZoomFactor);
 
-    // Colors
-    Color clrBg(0x0A, 0x0D, 0x14);        // Canvas background
-    Color clrHeader(0x0E, 0x12, 0x1D);    // Top Header background
-    Color clrCard(0x13, 0x17, 0x24);      // Card background
-    Color clrCardBorder(0x22, 0x2A, 0x3D); // Card border
-    Color clrTextWhite(0xF8, 0xFA, 0xFC);
-    Color clrTextDim(0x8C, 0x96, 0xAA);
-    Color clrTextMuted(0x56, 0x60, 0x76);
-    Color clrAccent(0x00, 0x78, 0xD4);    // Windows Azure
-    Color clrAccentLight(0x38, 0xBD, 0xF8);
-    Color clrGreen(0x34, 0xD3, 0x99);
+    // Windows 11 Native Fluent Dark Palette (Mica / Surface)
+    Color clrCanvas(0x1F, 0x1F, 0x1F);       // Windows 11 Dark Mica Surface
+    Color clrHeader(0x27, 0x27, 0x27);       // Header card
+    Color clrCard(0x2B, 0x2B, 0x2B);         // Fluent Card Surface
+    Color clrCardHover(0x32, 0x32, 0x32);    // Hover Card
+    Color clrCardBorder(0x38, 0x38, 0x38);   // Fluent Border
+    Color clrAccent(0x00, 0x78, 0xD4);       // Windows 11 Blue
+    Color clrAccentHover(0x10, 0x84, 0xD9);
+    Color clrAccentLight(0x60, 0xCD, 0xFF);  // Azure glow
+    Color clrTextWhite(0xFF, 0xFF, 0xFF);
+    Color clrTextSub(0xDF, 0xDF, 0xDF);
+    Color clrTextDim(0x9E, 0x9E, 0x9E);
+    Color clrGreen(0x6C, 0xC6, 0x44);
 
-    // Brushes
-    SolidBrush brBg(clrBg);
+    SolidBrush brCanvas(clrCanvas);
     SolidBrush brHeader(clrHeader);
     SolidBrush brCard(clrCard);
     SolidBrush brAccent(clrAccent);
     SolidBrush brAccentLight(clrAccentLight);
     SolidBrush brTextWhite(clrTextWhite);
+    SolidBrush brTextSub(clrTextSub);
     SolidBrush brTextDim(clrTextDim);
-    SolidBrush brTextMuted(clrTextMuted);
     SolidBrush brGreen(clrGreen);
 
-    // Pens
-    Pen penCardBorder(clrCardBorder, 1.0f);
+    Pen penBorder(clrCardBorder, 1.0f);
     Pen penAccent(clrAccentLight, 1.5f);
 
-    // Fonts
+    // Fonts (Segoe UI Variable)
     FontFamily ff(L"Segoe UI");
-    Font fontTitle(&ff, 17, FontStyleBold, UnitPixel);
-    Font fontSubtitle(&ff, 11, FontStyleRegular, UnitPixel);
+    Font fontHeroNum(&ff, 28, FontStyleBold, UnitPixel);
+    Font fontHeroTitle(&ff, 15, FontStyleBold, UnitPixel);
+    Font fontTitle(&ff, 15, FontStyleBold, UnitPixel);
     Font fontSection(&ff, 11, FontStyleBold, UnitPixel);
     Font fontBody(&ff, 12, FontStyleRegular, UnitPixel);
     Font fontBodyBold(&ff, 12, FontStyleBold, UnitPixel);
-    Font fontSmall(&ff, 10, FontStyleRegular, UnitPixel);
+    Font fontSmall(&ff, 11, FontStyleRegular, UnitPixel);
     Font fontBadge(&ff, 9, FontStyleBold, UnitPixel);
 
     StringFormat sfCenter;
@@ -402,214 +399,233 @@ static void RenderUI(Graphics& g, int clientWidth, int clientHeight) {
     sfRight.SetAlignment(StringAlignmentFar);
     sfRight.SetLineAlignment(StringAlignmentCenter);
 
-    // 1. Draw Canvas Background
-    g.FillRectangle(&brBg, 0.0f, 0.0f, (float)BASE_WIDTH, (float)BASE_HEIGHT);
+    // 1. Fill Canvas
+    g.FillRectangle(&brCanvas, 0.0f, 0.0f, (float)BASE_WIDTH, (float)BASE_HEIGHT);
 
-    // 2. Header Panel
-    RectF rcHeader(0.0f, 0.0f, (float)BASE_WIDTH, 74.0f);
+    // 2. Top Header Bar (Snipping Tool Native Style)
+    RectF rcHeader(0.0f, 0.0f, (float)BASE_WIDTH, 56.0f);
     g.FillRectangle(&brHeader, rcHeader);
-    Pen penHeaderLine(Color(0x1E, 0x24, 0x36), 1.0f);
-    g.DrawLine(&penHeaderLine, 0.0f, 74.0f, (float)BASE_WIDTH, 74.0f);
+    Pen penHLine(Color(0x33, 0x33, 0x33), 1.0f);
+    g.DrawLine(&penHLine, 0.0f, 56.0f, (float)BASE_WIDTH, 56.0f);
 
-    // Render Logo / Icon in Header
-    // Icon squircle badge at (20, 16) 42x42
-    RectF rcLogo(22.0f, 16.0f, 42.0f, 42.0f);
-    SolidBrush brLogoBg(Color(0x15, 0x19, 0x26));
-    FillRoundedRect(g, brLogoBg, rcLogo, 10.0f);
-    Pen penLogoBorder(Color(0x38, 0xBD, 0xF8), 1.2f);
-    DrawRoundedRect(g, penLogoBorder, rcLogo, 10.0f);
+    // Header Logo Reticle (Miniature Optical Crop)
+    RectF rcLogo(18.0f, 13.0f, 30.0f, 30.0f);
+    SolidBrush brLogoBg(Color(0x35, 0x35, 0x35));
+    FillRoundedRect(g, brLogoBg, rcLogo, 6.0f);
+    DrawRoundedRect(g, penBorder, rcLogo, 6.0f);
 
-    // Logo internal geometry (Miniature Optical Crop Reticle)
-    Pen penBracket(Color(0xFF, 0xFF, 0xFF), 2.2f);
-    // Top-left bracket
-    PointF ptTL[] = { { 30.0f, 32.0f }, { 30.0f, 24.0f }, { 38.0f, 24.0f } };
-    g.DrawLines(&penBracket, ptTL, 3);
-    // Bottom-right bracket
-    Pen penAccentBracket(Color(0x00, 0x78, 0xD4), 2.2f);
-    PointF ptBR[] = { { 56.0f, 42.0f }, { 56.0f, 50.0f }, { 48.0f, 50.0f } };
-    g.DrawLines(&penAccentBracket, ptBR, 3);
-    // Center lens optical dot
-    g.FillEllipse(&brAccentLight, 48.0f, 26.0f, 6.0f, 6.0f);
-    g.FillEllipse(&brTextWhite, 32.0f, 42.0f, 5.0f, 5.0f);
+    Pen penBr(Color(0xFF, 0xFF, 0xFF), 1.8f);
+    PointF ptL1[] = { { 24.0f, 26.0f }, { 24.0f, 19.0f }, { 31.0f, 19.0f } };
+    g.DrawLines(&penBr, ptL1, 3);
+    Pen penBrA(Color(0x00, 0x78, 0xD4), 1.8f);
+    PointF ptL2[] = { { 42.0f, 30.0f }, { 42.0f, 37.0f }, { 35.0f, 37.0f } };
+    g.DrawLines(&penBrA, ptL2, 3);
+    g.FillEllipse(&brAccentLight, 36.0f, 20.0f, 4.0f, 4.0f);
 
-    // Header Title and Subtitle
-    g.DrawString(L"High Snipping Frames", -1, &fontTitle, PointF(76.0f, 18.0f), &brTextWhite);
-    g.DrawString(L"Native High-FPS Recording for Windows Snipping Tool", -1, &fontSubtitle, PointF(76.0f, 42.0f), &brAccentLight);
+    g.DrawString(L"High Snipping Frames", -1, &fontTitle, PointF(56.0f, 18.0f), &brTextWhite);
 
-    // Top Right Version & Native Badge
-    RectF rcBadge(BASE_WIDTH - 110.0f, 26.0f, 88.0f, 22.0f);
-    SolidBrush brBadgeBg(Color(0x18, 0x2A, 0x40));
-    FillRoundedRect(g, brBadgeBg, rcBadge, 6.0f);
-    Pen penBadgeBorder(Color(0x00, 0x78, 0xD4), 1.0f);
-    DrawRoundedRect(g, penBadgeBorder, rcBadge, 6.0f);
-    g.DrawString(L"v2.0 • NATIVE", -1, &fontBadge, rcBadge, &sfCenter, &brAccentLight);
+    // Top Right Version Badge
+    RectF rcTopBadge(BASE_WIDTH - 96.0f, 17.0f, 78.0f, 22.0f);
+    SolidBrush brBadge(Color(0x33, 0x33, 0x33));
+    FillRoundedRect(g, brBadge, rcTopBadge, 4.0f);
+    DrawRoundedRect(g, penBorder, rcTopBadge, 4.0f);
+    g.DrawString(L"v2.1 NATIVE", -1, &fontBadge, rcTopBadge, &sfCenter, &brAccentLight);
 
-    // 3. Status Overview Card
-    RectF rcStatus(20.0f, 88.0f, BASE_WIDTH - 40.0f, 68.0f);
-    FillRoundedRect(g, brCard, rcStatus, 12.0f);
-    DrawRoundedRect(g, penCardBorder, rcStatus, 12.0f);
+    // 3. HERO CARD: Prominent Live Target Framerate Display
+    // Resolves confusion: clearly shows the selected framerate dynamically!
+    RectF rcHero(16.0f, 70.0f, BASE_WIDTH - 32.0f, 84.0f);
+    SolidBrush brHeroBg(Color(0x27, 0x27, 0x27));
+    FillRoundedRect(g, brHeroBg, rcHero, 10.0f);
+    Pen penHero(Color(0x00, 0x78, 0xD4), 1.2f);
+    DrawRoundedRect(g, penHero, rcHero, 10.0f);
 
-    DWORD daemonPid = FindProcessPID(L"SnippingToolDaemon.exe");
-    DWORD snipPid   = FindProcessPID(L"SnippingTool.exe");
+    // Left Icon & Big Target Number
+    WCHAR fpsMainStr[32];
     UINT32 maxRefresh = GetMaxDisplayRefresh();
-
-    // Pulse dot (green if active)
-    g.FillEllipse(&brGreen, 36.0f, 102.0f, 8.0f, 8.0f);
-    WCHAR dStatus[64];
-    if (daemonPid != 0) {
-        swprintf(dStatus, 64, L"High-FPS Daemon: Active (PID %u)", daemonPid);
-        g.DrawString(dStatus, -1, &fontBodyBold, PointF(52.0f, 98.0f), &brGreen);
+    if (g_CurrentFPS == 0) {
+        swprintf(fpsMainStr, 32, L"AUTO (%u FPS)", maxRefresh);
     } else {
-        SolidBrush brRed(Color(0xF8, 0x71, 0x71));
-        g.DrawString(L"High-FPS Daemon: Inactive", -1, &fontBodyBold, PointF(52.0f, 98.0f), &brRed);
+        swprintf(fpsMainStr, 32, L"%u FPS", g_CurrentFPS);
     }
 
-    // Display info & Snipping tool status line
-    WCHAR subStatus[128];
-    swprintf(subStatus, 128, L"Display Refresh: %u Hz  •  Snipping Tool: %s",
-             maxRefresh, (snipPid != 0 ? L"Active (Hooked)" : L"Ready to record"));
-    g.DrawString(subStatus, -1, &fontSubtitle, PointF(36.0f, 126.0f), &brTextDim);
+    g.DrawString(fpsMainStr, -1, &fontHeroNum, PointF(30.0f, 80.0f), &brTextWhite);
 
-    // 4. Section: Target Framerate Selection
-    g.DrawString(L"TARGET FRAMERATE", -1, &fontSection, PointF(22.0f, 172.0f), &brTextMuted);
+    // Subtitle & Status Badge
+    g.DrawString(L"ACTIVE RECORDING TARGET", -1, &fontSection, PointF(32.0f, 120.0f), &brAccentLight);
 
-    // Render 7 Interactive Segmented FPS Pills
-    float fpsCardX = 20.0f;
-    float fpsCardY = 192.0f;
-    float pillW = (BASE_WIDTH - 40.0f - (g_NumFpsOptions - 1) * 6.0f) / g_NumFpsOptions;
-    float pillH = 44.0f;
+    // Right Side: Live System Details
+    DWORD daemonPid = FindProcessPID(L"SnippingToolDaemon.exe");
+    DWORD snipPid   = FindProcessPID(L"SnippingTool.exe");
+
+    RectF rcHeroRight(BASE_WIDTH - 210.0f, 80.0f, 180.0f, 64.0f);
+    WCHAR sysInfo[128];
+    swprintf(sysInfo, 128, L"Display: %u Hz\nDaemon: %s\nSnipping Tool: %s",
+             maxRefresh,
+             (daemonPid != 0 ? L"Active" : L"Inactive"),
+             (snipPid != 0 ? L"Hooked & Ready" : L"Idle"));
+    g.DrawString(sysInfo, -1, &fontSmall, rcHeroRight, &sfLeft, &brTextDim);
+
+    // Green indicator dot on Hero Card
+    g.FillEllipse(&brGreen, BASE_WIDTH - 222.0f, 96.0f, 6.0f, 6.0f);
+
+    // 4. SECTION: Target Framerate Selection (Segmented Pills)
+    g.DrawString(L"SELECT TARGET FRAMERATE", -1, &fontSection, PointF(18.0f, 168.0f), &brTextDim);
+
+    float fpsX = 16.0f;
+    float fpsY = 188.0f;
+    float pillW = (BASE_WIDTH - 32.0f - (g_NumFpsOptions - 1) * 6.0f) / g_NumFpsOptions;
+    float pillH = 40.0f;
 
     for (int i = 0; i < g_NumFpsOptions; i++) {
-        RectF rcPill(fpsCardX + i * (pillW + 6.0f), fpsCardY, pillW, pillH);
+        RectF rcPill(fpsX + i * (pillW + 6.0f), fpsY, pillW, pillH);
         BOOL isSelected = (g_CurrentFPS == g_FpsOptions[i]);
         BOOL isHovered  = (g_HoveredHitId == HIT_FPS_PRESET && g_HoveredData == i);
 
         if (isSelected) {
-            // Active selection: Azure glowing gradient
-            LinearGradientBrush brSel(rcPill, Color(0x00, 0x78, 0xD4), Color(0x02, 0x84, 0xC7), LinearGradientModeVertical);
-            FillRoundedRect(g, brSel, rcPill, 8.0f);
-            Pen penSel(Color(0x38, 0xBD, 0xF8), 1.5f);
-            DrawRoundedRect(g, penSel, rcPill, 8.0f);
+            // Selected: Fluent Blue Pill
+            SolidBrush brSel(clrAccent);
+            FillRoundedRect(g, brSel, rcPill, 6.0f);
+            Pen penSel(clrAccentLight, 1.2f);
+            DrawRoundedRect(g, penSel, rcPill, 6.0f);
             g.DrawString(g_FpsLabels[i], -1, &fontBodyBold, rcPill, &sfCenter, &brTextWhite);
         } else {
-            // Inactive
-            Color cPillBg = isHovered ? Color(0x1C, 0x22, 0x34) : Color(0x13, 0x17, 0x24);
-            SolidBrush brInact(cPillBg);
-            FillRoundedRect(g, brInact, rcPill, 8.0f);
-            Pen penInact(isHovered ? Color(0x38, 0xBD, 0xF8) : clrCardBorder, 1.0f);
-            DrawRoundedRect(g, penInact, rcPill, 8.0f);
-            g.DrawString(g_FpsLabels[i], -1, &fontBody, rcPill, &sfCenter, isHovered ? &brTextWhite : &brTextDim);
+            // Unselected
+            Color cPill = isHovered ? clrCardHover : clrCard;
+            SolidBrush brPill(cPill);
+            FillRoundedRect(g, brPill, rcPill, 6.0f);
+            Pen penPill(isHovered ? clrAccentLight : clrCardBorder, 1.0f);
+            DrawRoundedRect(g, penPill, rcPill, 6.0f);
+            g.DrawString(g_FpsLabels[i], -1, &fontBody, rcPill, &sfCenter, isHovered ? &brTextWhite : &brTextSub);
         }
     }
 
-    // 5. Section: Bitrate Quality Presets
-    g.DrawString(L"RECORDING BITRATE QUALITY", -1, &fontSection, PointF(22.0f, 252.0f), &brTextMuted);
+    // 5. SECTION: Bitrate & Quality Setting
+    g.DrawString(L"RECORDING BITRATE QUALITY", -1, &fontSection, PointF(18.0f, 244.0f), &brTextDim);
 
-    float qCardY = 272.0f;
-    float qCardW = (BASE_WIDTH - 40.0f - 2 * 8.0f) / 3.0f;
-    float qCardH = 64.0f;
+    float qY = 264.0f;
+    float qW = (BASE_WIDTH - 32.0f - 2 * 8.0f) / 3.0f;
+    float qH = 58.0f;
 
     for (int i = 0; i < g_NumQualityOptions; i++) {
-        RectF rcQ(20.0f + i * (qCardW + 8.0f), qCardY, qCardW, qCardH);
+        RectF rcQ(16.0f + i * (qW + 8.0f), qY, qW, qH);
         BOOL isSelected = (g_QualityLevel == i);
         BOOL isHovered  = (g_HoveredHitId == HIT_QUALITY_PRESET && g_HoveredData == i);
 
-        Color cBg = isSelected ? Color(0x10, 0x24, 0x3E) : (isHovered ? Color(0x1C, 0x22, 0x34) : Color(0x13, 0x17, 0x24));
+        Color cBg = isSelected ? Color(0x23, 0x33, 0x48) : (isHovered ? clrCardHover : clrCard);
         SolidBrush brQ(cBg);
-        FillRoundedRect(g, brQ, rcQ, 10.0f);
-        Pen penQ(isSelected ? Color(0x38, 0xBD, 0xF8) : (isHovered ? Color(0x2E, 0x38, 0x50) : clrCardBorder), isSelected ? 1.5f : 1.0f);
-        DrawRoundedRect(g, penQ, rcQ, 10.0f);
+        FillRoundedRect(g, brQ, rcQ, 8.0f);
+        Pen penQ(isSelected ? clrAccentLight : (isHovered ? Color(0x48, 0x48, 0x48) : clrCardBorder), isSelected ? 1.5f : 1.0f);
+        DrawRoundedRect(g, penQ, rcQ, 8.0f);
 
-        RectF rcQTitle(rcQ.X + 10.0f, rcQ.Y + 10.0f, rcQ.Width - 20.0f, 20.0f);
-        RectF rcQDesc(rcQ.X + 10.0f, rcQ.Y + 34.0f, rcQ.Width - 20.0f, 20.0f);
+        RectF rcQTitle(rcQ.X + 10.0f, rcQ.Y + 8.0f, rcQ.Width - 20.0f, 18.0f);
+        RectF rcQDesc(rcQ.X + 10.0f, rcQ.Y + 28.0f, rcQ.Width - 20.0f, 24.0f);
         g.DrawString(g_QualityLabels[i], -1, &fontBodyBold, rcQTitle, &sfLeft, isSelected ? &brAccentLight : &brTextWhite);
         g.DrawString(g_QualityDescs[i], -1, &fontSmall, rcQDesc, &sfLeft, &brTextDim);
     }
 
-    // 6. Auto-start Checkbox Card
-    RectF rcAuto(20.0f, 350.0f, BASE_WIDTH - 40.0f, 44.0f);
-    BOOL isAutoHovered = (g_HoveredHitId == HIT_AUTOSTART);
-    SolidBrush brAutoBg(isAutoHovered ? Color(0x17, 0x1C, 0x2B) : clrCard);
-    FillRoundedRect(g, brAutoBg, rcAuto, 8.0f);
-    DrawRoundedRect(g, penCardBorder, rcAuto, 8.0f);
+    // 6. SECTION: Auto-Start Checkbox Card
+    RectF rcAuto(16.0f, 336.0f, BASE_WIDTH - 32.0f, 40.0f);
+    BOOL isAutoHover = (g_HoveredHitId == HIT_AUTOSTART);
+    SolidBrush brAuto(isAutoHover ? clrCardHover : clrCard);
+    FillRoundedRect(g, brAuto, rcAuto, 8.0f);
+    DrawRoundedRect(g, penBorder, rcAuto, 8.0f);
 
-    // Checkbox square
-    RectF rcBox(34.0f, 363.0f, 18.0f, 18.0f);
+    RectF rcBox(28.0f, 347.0f, 18.0f, 18.0f);
     if (g_AutoStart) {
         FillRoundedRect(g, brAccent, rcBox, 4.0f);
-        // Checkmark
         Pen penCheck(Color(0xFF, 0xFF, 0xFF), 2.0f);
-        PointF ptC[] = { { 38.0f, 372.0f }, { 42.0f, 376.0f }, { 48.0f, 368.0f } };
+        PointF ptC[] = { { 32.0f, 356.0f }, { 36.0f, 360.0f }, { 42.0f, 351.0f } };
         g.DrawLines(&penCheck, ptC, 3);
     } else {
-        Pen penBox(clrTextDim, 1.5f);
+        Pen penBox(clrTextDim, 1.2f);
         DrawRoundedRect(g, penBox, rcBox, 4.0f);
     }
-    g.DrawString(L"Start High Snipping Frames automatically with Windows", -1, &fontBody, PointF(62.0f, 361.0f), &brTextWhite);
+    g.DrawString(L"Start High Snipping Frames automatically with Windows", -1, &fontBody, PointF(54.0f, 346.0f), &brTextWhite);
 
-    // 7. Action Button Bar
-    // Button: Apply Settings (Prominent)
-    RectF rcBtnApply(20.0f, 410.0f, 140.0f, 42.0f);
-    BOOL isApplyHover = (g_HoveredHitId == HIT_BTN_APPLY);
-    LinearGradientBrush brApply(rcBtnApply,
-                                isApplyHover ? Color(0x02, 0x84, 0xC7) : Color(0x00, 0x78, 0xD4),
-                                isApplyHover ? Color(0x00, 0x78, 0xD4) : Color(0x00, 0x5A, 0x9E),
-                                LinearGradientModeVertical);
-    FillRoundedRect(g, brApply, rcBtnApply, 8.0f);
-    Pen penApply(Color(0x38, 0xBD, 0xF8), 1.0f);
-    DrawRoundedRect(g, penApply, rcBtnApply, 8.0f);
-    g.DrawString(L"Apply Settings", -1, &fontBodyBold, rcBtnApply, &sfCenter, &brTextWhite);
-
-    // Button: Start Recording (Snipping Tool)
-    RectF rcBtnRec(168.0f, 410.0f, 150.0f, 42.0f);
+    // 7. PRIMARY ACTIONS
+    // Record Screen (Primary Fluent Button)
+    RectF rcBtnRec(16.0f, 392.0f, 150.0f, 42.0f);
     BOOL isRecHover = (g_HoveredHitId == HIT_BTN_RECORD);
-    SolidBrush brRec(isRecHover ? Color(0x22, 0x2A, 0x3E) : Color(0x15, 0x1A, 0x28));
-    FillRoundedRect(g, brRec, rcBtnRec, 8.0f);
-    Pen penRec(isRecHover ? Color(0x38, 0xBD, 0xF8) : clrCardBorder, 1.0f);
-    DrawRoundedRect(g, penRec, rcBtnRec, 8.0f);
-    g.DrawString(L"Record Screen", -1, &fontBody, rcBtnRec, &sfCenter, isRecHover ? &brAccentLight : &brTextWhite);
+    SolidBrush brBtnRec(isRecHover ? clrAccentHover : clrAccent);
+    FillRoundedRect(g, brBtnRec, rcBtnRec, 6.0f);
+    Pen penBtnRec(clrAccentLight, 1.0f);
+    DrawRoundedRect(g, penBtnRec, rcBtnRec, 6.0f);
+    g.DrawString(L"Record Screen", -1, &fontBodyBold, rcBtnRec, &sfCenter, &brTextWhite);
 
-    // Button: Analyze Latest Recording
-    RectF rcBtnAnalyze(326.0f, 410.0f, 194.0f, 42.0f);
-    BOOL isAnalyzeHover = (g_HoveredHitId == HIT_BTN_ANALYZE);
-    SolidBrush brAnalyze(isAnalyzeHover ? Color(0x22, 0x2A, 0x3E) : Color(0x15, 0x1A, 0x28));
-    FillRoundedRect(g, brAnalyze, rcBtnAnalyze, 8.0f);
-    Pen penAnalyze(isAnalyzeHover ? Color(0x38, 0xBD, 0xF8) : clrCardBorder, 1.0f);
-    DrawRoundedRect(g, penAnalyze, rcBtnAnalyze, 8.0f);
-    g.DrawString(L"Analyze Latest Video", -1, &fontBody, rcBtnAnalyze, &sfCenter, isAnalyzeHover ? &brAccentLight : &brTextWhite);
-
-    // 8. Secondary Buttons: Open Folder & Minimize
-    RectF rcBtnFolder(20.0f, 460.0f, 150.0f, 36.0f);
+    // View Recordings
+    RectF rcBtnFolder(174.0f, 392.0f, 140.0f, 42.0f);
     BOOL isFolderHover = (g_HoveredHitId == HIT_BTN_FOLDER);
-    SolidBrush brFolder(isFolderHover ? Color(0x1C, 0x22, 0x34) : Color(0x11, 0x15, 0x20));
-    FillRoundedRect(g, brFolder, rcBtnFolder, 8.0f);
-    Pen penFolder(isFolderHover ? Color(0x38, 0xBD, 0xF8) : clrCardBorder, 1.0f);
-    DrawRoundedRect(g, penFolder, rcBtnFolder, 8.0f);
-    g.DrawString(L"Open Recordings", -1, &fontSubtitle, rcBtnFolder, &sfCenter, isFolderHover ? &brAccentLight : &brTextDim);
+    SolidBrush brFolder(isFolderHover ? clrCardHover : clrCard);
+    FillRoundedRect(g, brFolder, rcBtnFolder, 6.0f);
+    DrawRoundedRect(g, isFolderHover ? penAccent : penBorder, rcBtnFolder, 6.0f);
+    g.DrawString(L"Open Videos", -1, &fontBody, rcBtnFolder, &sfCenter, isFolderHover ? &brAccentLight : &brTextWhite);
 
-    RectF rcBtnMin(178.0f, 460.0f, 140.0f, 36.0f);
-    BOOL isMinHover = (g_HoveredHitId == HIT_BTN_MINIMIZE);
-    SolidBrush brMin(isMinHover ? Color(0x1C, 0x22, 0x34) : Color(0x11, 0x15, 0x20));
-    FillRoundedRect(g, brMin, rcBtnMin, 8.0f);
-    Pen penMin(isMinHover ? Color(0x38, 0xBD, 0xF8) : clrCardBorder, 1.0f);
-    DrawRoundedRect(g, penMin, rcBtnMin, 8.0f);
-    g.DrawString(L"Minimize to Tray", -1, &fontSubtitle, rcBtnMin, &sfCenter, isMinHover ? &brAccentLight : &brTextDim);
+    // Verify Latest Video (ffprobe)
+    RectF rcBtnVerify(322.0f, 392.0f, BASE_WIDTH - 322.0f - 16.0f, 42.0f);
+    BOOL isVerifyHover = (g_HoveredHitId == HIT_BTN_ANALYZE);
+    SolidBrush brVerify(isVerifyHover ? clrCardHover : clrCard);
+    FillRoundedRect(g, brVerify, rcBtnVerify, 6.0f);
+    DrawRoundedRect(g, isVerifyHover ? penAccent : penBorder, rcBtnVerify, 6.0f);
+    g.DrawString(L"Verify Video FPS", -1, &fontBody, rcBtnVerify, &sfCenter, isVerifyHover ? &brAccentLight : &brTextWhite);
 
-    // 9. Modern Bottom Status & Zoom Indicator
-    RectF rcFooter(0.0f, (float)BASE_HEIGHT - 38.0f, (float)BASE_WIDTH, 38.0f);
-    SolidBrush brFooter(Color(0x09, 0x0C, 0x12));
-    g.FillRectangle(&brFooter, rcFooter);
-    Pen penFooterLine(Color(0x1A, 0x20, 0x30), 1.0f);
-    g.DrawLine(&penFooterLine, 0.0f, rcFooter.Y, (float)BASE_WIDTH, rcFooter.Y);
+    // 8. Quick Tips / Info Box
+    RectF rcInfo(16.0f, 448.0f, BASE_WIDTH - 32.0f, 52.0f);
+    SolidBrush brInfo(Color(0x24, 0x24, 0x24));
+    FillRoundedRect(g, brInfo, rcInfo, 8.0f);
+    DrawRoundedRect(g, penBorder, rcInfo, 8.0f);
 
-    WCHAR zoomInfo[128];
-    int curZoomPct = (int)(g_ZoomFactor * 100.0f + 0.5f);
-    swprintf(zoomInfo, 128, L"Zoom: %d%%  (Ctrl + Scroll to zoom • Ctrl + 0 to reset)", curZoomPct);
-    RectF rcZoomText(20.0f, rcFooter.Y, BASE_WIDTH - 40.0f, 38.0f);
-    g.DrawString(zoomInfo, -1, &fontSmall, rcZoomText, &sfLeft, &brTextDim);
+    DWORD now = GetTickCount();
+    if (now - g_LastSavedTick < 2500) {
+        // Show temporary saved toast
+        SolidBrush brGreenText(clrGreen);
+        g.DrawString(L"✓ Setting applied instantly! Snipping Tool will record with the new target framerate.",
+                     -1, &fontSmall, rcInfo, &sfCenter, &brGreenText);
+    } else {
+        g.DrawString(L"Tip: Use Win + Shift + S for instant screenshot snips. Video recording automatically uses your selected target framerate.",
+                     -1, &fontSmall, rcInfo, &sfCenter, &brTextDim);
+    }
 
-    WCHAR verText[] = L"Windows 11 24H2 Ready";
-    g.DrawString(verText, -1, &fontSmall, rcZoomText, &sfRight, &brAccentLight);
+    // 9. BOTTOM BAR: Zoom Controls & Footer
+    RectF rcFooter(0.0f, (float)BASE_HEIGHT - 44.0f, (float)BASE_WIDTH, 44.0f);
+    SolidBrush brFoot(Color(0x18, 0x18, 0x18));
+    g.FillRectangle(&brFoot, rcFooter);
+    Pen penFLine(Color(0x2E, 0x2E, 0x2E), 1.0f);
+    g.DrawLine(&penFLine, 0.0f, rcFooter.Y, (float)BASE_WIDTH, rcFooter.Y);
+
+    // Zoom Interactive Controls: [-] 100% [+]
+    int zoomPct = (int)(g_ZoomFactor * 100.0f + 0.5f);
+    WCHAR zoomTxt[64];
+    swprintf(zoomTxt, 64, L"Zoom: %d%%", zoomPct);
+
+    // Left info
+    g.DrawString(L"Hold Ctrl + Scroll wheel to zoom", -1, &fontSmall, PointF(18.0f, rcFooter.Y + 12.0f), &brTextDim);
+
+    // Zoom Buttons on right: [-] [ 100% ] [+]
+    float zBtnY = rcFooter.Y + 8.0f;
+    RectF rcZMinus(BASE_WIDTH - 150.0f, zBtnY, 28.0f, 26.0f);
+    RectF rcZText(BASE_WIDTH - 118.0f, zBtnY, 56.0f, 26.0f);
+    RectF rcZPlus(BASE_WIDTH - 58.0f, zBtnY, 28.0f, 26.0f);
+
+    BOOL hMinus = (g_HoveredHitId == HIT_ZOOM_MINUS);
+    BOOL hText  = (g_HoveredHitId == HIT_ZOOM_RESET);
+    BOOL hPlus  = (g_HoveredHitId == HIT_ZOOM_PLUS);
+
+    SolidBrush brZBtn(Color(0x28, 0x28, 0x28));
+    SolidBrush brZHov(Color(0x38, 0x38, 0x38));
+
+    FillRoundedRect(g, hMinus ? brZHov : brZBtn, rcZMinus, 4.0f);
+    DrawRoundedRect(g, penBorder, rcZMinus, 4.0f);
+    g.DrawString(L"-", -1, &fontBodyBold, rcZMinus, &sfCenter, &brTextWhite);
+
+    FillRoundedRect(g, hText ? brZHov : brZBtn, rcZText, 4.0f);
+    DrawRoundedRect(g, penBorder, rcZText, 4.0f);
+    WCHAR pctStr[16];
+    swprintf(pctStr, 16, L"%d%%", zoomPct);
+    g.DrawString(pctStr, -1, &fontSmall, rcZText, &sfCenter, hText ? &brAccentLight : &brTextWhite);
+
+    FillRoundedRect(g, hPlus ? brZHov : brZBtn, rcZPlus, 4.0f);
+    DrawRoundedRect(g, penBorder, rcZPlus, 4.0f);
+    g.DrawString(L"+", -1, &fontBodyBold, rcZPlus, &sfCenter, &brTextWhite);
 }
 
 // Hit-testing logic: converts physical mouse coordinates to base logical coordinates
@@ -619,12 +635,12 @@ static int HitTest(int mouseX, int mouseY, int* pData) {
     if (pData) *pData = -1;
 
     // Check FPS Presets
-    float fpsCardX = 20.0f;
-    float fpsCardY = 192.0f;
-    float pillW = (BASE_WIDTH - 40.0f - (g_NumFpsOptions - 1) * 6.0f) / g_NumFpsOptions;
-    float pillH = 44.0f;
+    float fpsX = 16.0f;
+    float fpsY = 188.0f;
+    float pillW = (BASE_WIDTH - 32.0f - (g_NumFpsOptions - 1) * 6.0f) / g_NumFpsOptions;
+    float pillH = 40.0f;
     for (int i = 0; i < g_NumFpsOptions; i++) {
-        RectF rcPill(fpsCardX + i * (pillW + 6.0f), fpsCardY, pillW, pillH);
+        RectF rcPill(fpsX + i * (pillW + 6.0f), fpsY, pillW, pillH);
         if (rcPill.Contains(lx, ly)) {
             if (pData) *pData = i;
             return HIT_FPS_PRESET;
@@ -632,11 +648,11 @@ static int HitTest(int mouseX, int mouseY, int* pData) {
     }
 
     // Check Quality Presets
-    float qCardY = 272.0f;
-    float qCardW = (BASE_WIDTH - 40.0f - 2 * 8.0f) / 3.0f;
-    float qCardH = 64.0f;
+    float qY = 264.0f;
+    float qW = (BASE_WIDTH - 32.0f - 2 * 8.0f) / 3.0f;
+    float qH = 58.0f;
     for (int i = 0; i < g_NumQualityOptions; i++) {
-        RectF rcQ(20.0f + i * (qCardW + 8.0f), qCardY, qCardW, qCardH);
+        RectF rcQ(16.0f + i * (qW + 8.0f), qY, qW, qH);
         if (rcQ.Contains(lx, ly)) {
             if (pData) *pData = i;
             return HIT_QUALITY_PRESET;
@@ -644,28 +660,31 @@ static int HitTest(int mouseX, int mouseY, int* pData) {
     }
 
     // Auto-start Checkbox
-    RectF rcAuto(20.0f, 350.0f, BASE_WIDTH - 40.0f, 44.0f);
+    RectF rcAuto(16.0f, 336.0f, BASE_WIDTH - 32.0f, 40.0f);
     if (rcAuto.Contains(lx, ly)) return HIT_AUTOSTART;
 
-    // Apply Button
-    RectF rcBtnApply(20.0f, 410.0f, 140.0f, 42.0f);
-    if (rcBtnApply.Contains(lx, ly)) return HIT_BTN_APPLY;
-
     // Record Button
-    RectF rcBtnRec(168.0f, 410.0f, 150.0f, 42.0f);
+    RectF rcBtnRec(16.0f, 392.0f, 150.0f, 42.0f);
     if (rcBtnRec.Contains(lx, ly)) return HIT_BTN_RECORD;
 
-    // Analyze Button
-    RectF rcBtnAnalyze(326.0f, 410.0f, 194.0f, 42.0f);
-    if (rcBtnAnalyze.Contains(lx, ly)) return HIT_BTN_ANALYZE;
-
     // Open Folder Button
-    RectF rcBtnFolder(20.0f, 460.0f, 150.0f, 36.0f);
+    RectF rcBtnFolder(174.0f, 392.0f, 140.0f, 42.0f);
     if (rcBtnFolder.Contains(lx, ly)) return HIT_BTN_FOLDER;
 
-    // Minimize Button
-    RectF rcBtnMin(178.0f, 460.0f, 140.0f, 36.0f);
-    if (rcBtnMin.Contains(lx, ly)) return HIT_BTN_MINIMIZE;
+    // Verify Button
+    RectF rcBtnVerify(322.0f, 392.0f, BASE_WIDTH - 322.0f - 16.0f, 42.0f);
+    if (rcBtnVerify.Contains(lx, ly)) return HIT_BTN_ANALYZE;
+
+    // Zoom Buttons
+    float zBtnY = (float)BASE_HEIGHT - 44.0f + 8.0f;
+    RectF rcZMinus(BASE_WIDTH - 150.0f, zBtnY, 28.0f, 26.0f);
+    if (rcZMinus.Contains(lx, ly)) return HIT_ZOOM_MINUS;
+
+    RectF rcZText(BASE_WIDTH - 118.0f, zBtnY, 56.0f, 26.0f);
+    if (rcZText.Contains(lx, ly)) return HIT_ZOOM_RESET;
+
+    RectF rcZPlus(BASE_WIDTH - 58.0f, zBtnY, 28.0f, 26.0f);
+    if (rcZPlus.Contains(lx, ly)) return HIT_ZOOM_PLUS;
 
     return HIT_NONE;
 }
@@ -676,7 +695,7 @@ static void ShowTrayMenu(HWND hWnd) {
     GetCursorPos(&pt);
     HMENU hMenu = CreatePopupMenu();
 
-    AppendMenuW(hMenu, MF_STRING, IDM_OPEN, L"High Snipping Frames Control Center");
+    AppendMenuW(hMenu, MF_STRING, IDM_OPEN, L"High Snipping Frames");
     SetMenuDefaultItem(hMenu, IDM_OPEN, FALSE);
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
 
@@ -695,7 +714,7 @@ static void ShowTrayMenu(HWND hWnd) {
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(hMenu, MF_STRING, IDM_RECORD, L"Record Screen (Snipping Tool)");
     AppendMenuW(hMenu, MF_STRING, IDM_FOLDER, L"Open Recordings Folder");
-    AppendMenuW(hMenu, MF_STRING, IDM_ANALYZE, L"Analyze Latest Video");
+    AppendMenuW(hMenu, MF_STRING, IDM_ANALYZE, L"Verify Latest Video");
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(hMenu, MF_STRING, IDM_RESET_ZOOM, L"Reset Zoom to 100%");
     AppendMenuW(hMenu, MF_STRING, IDM_RESTART_SVC, L"Restart Daemon Service");
@@ -724,18 +743,16 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             if (GetKeyState(VK_CONTROL) & 0x8000) {
                 short zDelta = GET_WHEEL_DELTA_WPARAM(wParam);
                 if (zDelta > 0) {
-                    // Zoom In
-                    if (g_ZoomFactor < 2.45f) {
+                    if (g_ZoomFactor < 1.95f) {
                         g_ZoomFactor += 0.10f;
-                        if (g_ZoomFactor > 2.5f) g_ZoomFactor = 2.5f;
+                        if (g_ZoomFactor > 2.0f) g_ZoomFactor = 2.0f;
                         ApplyZoomWindowSize(hWnd);
                         SaveSettings();
                     }
                 } else if (zDelta < 0) {
-                    // Zoom Out
-                    if (g_ZoomFactor > 0.75f) {
+                    if (g_ZoomFactor > 0.85f) {
                         g_ZoomFactor -= 0.10f;
-                        if (g_ZoomFactor < 0.75f) g_ZoomFactor = 0.75f;
+                        if (g_ZoomFactor < 0.8f) g_ZoomFactor = 0.8f;
                         ApplyZoomWindowSize(hWnd);
                         SaveSettings();
                     }
@@ -768,7 +785,6 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
                 InvalidateRect(hWnd, NULL, FALSE);
             }
 
-            // Track mouse leaves for clean un-hovering
             TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, hWnd, 0 };
             TrackMouseEvent(&tme);
             break;
@@ -798,6 +814,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             int hit = HitTest(mx, my, &data);
 
             if (hit == HIT_FPS_PRESET && data >= 0 && data < g_NumFpsOptions) {
+                // Instantly update target FPS and persist
                 g_CurrentFPS = g_FpsOptions[data];
                 SaveSettings();
                 InvalidateRect(hWnd, NULL, FALSE);
@@ -809,24 +826,36 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
                 g_AutoStart = !g_AutoStart;
                 SetAutoStart(g_AutoStart);
                 InvalidateRect(hWnd, NULL, FALSE);
-            } else if (hit == HIT_BTN_APPLY) {
-                SaveSettings();
-                MessageBoxW(hWnd, L"Settings saved successfully!\nSnipping Tool will record with the new framerate immediately.",
-                            L"High Snipping Frames", MB_ICONINFORMATION);
             } else if (hit == HIT_BTN_RECORD) {
                 LaunchSnippingTool();
             } else if (hit == HIT_BTN_FOLDER) {
                 OpenRecordingsFolder();
             } else if (hit == HIT_BTN_ANALYZE) {
                 AnalyzeLatestRecording(hWnd);
-            } else if (hit == HIT_BTN_MINIMIZE) {
-                ShowWindow(hWnd, SW_HIDE);
+            } else if (hit == HIT_ZOOM_MINUS) {
+                if (g_ZoomFactor > 0.85f) {
+                    g_ZoomFactor -= 0.10f;
+                    if (g_ZoomFactor < 0.8f) g_ZoomFactor = 0.8f;
+                    ApplyZoomWindowSize(hWnd);
+                    SaveSettings();
+                }
+            } else if (hit == HIT_ZOOM_PLUS) {
+                if (g_ZoomFactor < 1.95f) {
+                    g_ZoomFactor += 0.10f;
+                    if (g_ZoomFactor > 2.0f) g_ZoomFactor = 2.0f;
+                    ApplyZoomWindowSize(hWnd);
+                    SaveSettings();
+                }
+            } else if (hit == HIT_ZOOM_RESET) {
+                g_ZoomFactor = 1.0f;
+                ApplyZoomWindowSize(hWnd);
+                SaveSettings();
             }
             break;
         }
 
         case WM_ERASEBKGND:
-            return 1; // Handled in double-buffered WM_PAINT to prevent flicker
+            return 1; // Double buffered in WM_PAINT
 
         case WM_PAINT: {
             PAINTSTRUCT ps;
@@ -838,13 +867,9 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             int h = rcClient.bottom - rcClient.top;
 
             if (w > 0 && h > 0) {
-                // High-performance double buffering: allocate GDI+ bitmap backbuffer
                 Bitmap backBuffer(w, h, PixelFormat32bppARGB);
                 Graphics g(&backBuffer);
-
                 RenderUI(g, w, h);
-
-                // Blit backbuffer onto screen DC
                 Graphics gScreen(hdc);
                 gScreen.DrawImage(&backBuffer, 0, 0);
             }
@@ -865,9 +890,9 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
                 case IDM_FOLDER: OpenRecordingsFolder(); break;
                 case IDM_ANALYZE: AnalyzeLatestRecording(hWnd); break;
 
-                case IDM_FPS_AUTO: g_CurrentFPS = 0; SaveSettings(); InvalidateRect(hWnd, NULL, FALSE); break;
-                case IDM_FPS_60:   g_CurrentFPS = 60; SaveSettings(); InvalidateRect(hWnd, NULL, FALSE); break;
-                case IDM_FPS_90:   g_CurrentFPS = 90; SaveSettings(); InvalidateRect(hWnd, NULL, FALSE); break;
+                case IDM_FPS_AUTO: g_CurrentFPS = 0;   SaveSettings(); InvalidateRect(hWnd, NULL, FALSE); break;
+                case IDM_FPS_60:   g_CurrentFPS = 60;  SaveSettings(); InvalidateRect(hWnd, NULL, FALSE); break;
+                case IDM_FPS_90:   g_CurrentFPS = 90;  SaveSettings(); InvalidateRect(hWnd, NULL, FALSE); break;
                 case IDM_FPS_120:  g_CurrentFPS = 120; SaveSettings(); InvalidateRect(hWnd, NULL, FALSE); break;
                 case IDM_FPS_144:  g_CurrentFPS = 144; SaveSettings(); InvalidateRect(hWnd, NULL, FALSE); break;
                 case IDM_FPS_165:  g_CurrentFPS = 165; SaveSettings(); InvalidateRect(hWnd, NULL, FALSE); break;
@@ -936,14 +961,12 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow) {
     g_hInstance = hInstance;
 
-    // Initialize GDI+
     GdiplusStartupInput gdiplusStartupInput;
     GdiplusStartup(&g_gdiplusToken, &gdiplusStartupInput, NULL);
 
-    // Single instance mutex
-    HANDLE hMutex = CreateMutexW(NULL, TRUE, L"Local\\HighSnippingFramesGUIMutex");
+    HANDLE hMutex = CreateMutexW(NULL, TRUE, L"Local\\HighSnippingFramesGUIMutex_v3");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
-        HWND hExist = FindWindowW(L"HighSnippingFramesGUIClass", NULL);
+        HWND hExist = FindWindowW(L"HighSnippingFramesGUIClass_v3", NULL);
         if (hExist) {
             ShowWindow(hExist, SW_SHOW);
             SetForegroundWindow(hExist);
@@ -954,25 +977,22 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
 
     LoadSettings();
 
-    // Register Window Class
     WNDCLASSEXW wc = { sizeof(wc) };
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hInstance;
-    wc.lpszClassName = L"HighSnippingFramesGUIClass";
+    wc.lpszClassName = L"HighSnippingFramesGUIClass_v3";
     wc.hCursor = LoadCursorW(NULL, IDC_ARROW);
     wc.hIcon = LoadIconW(hInstance, MAKEINTRESOURCEW(1));
     wc.hIconSm = LoadIconW(hInstance, MAKEINTRESOURCEW(1));
     RegisterClassExW(&wc);
 
-    // Initial window size computed from zoom
     int w = (int)(BASE_WIDTH * g_ZoomFactor + 0.5f);
     int h = (int)(BASE_HEIGHT * g_ZoomFactor + 0.5f);
     int x = (GetSystemMetrics(SM_CXSCREEN) - w) / 2;
     int y = (GetSystemMetrics(SM_CYSCREEN) - h) / 2;
 
-    // Window creation with resizeable frame
-    g_hWndMain = CreateWindowExW(WS_EX_APPWINDOW, L"HighSnippingFramesGUIClass",
-                                 L"High Snipping Frames - Control Center",
+    g_hWndMain = CreateWindowExW(WS_EX_APPWINDOW, L"HighSnippingFramesGUIClass_v3",
+                                 L"High Snipping Frames",
                                  WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
                                  x, y, w, h, NULL, NULL, hInstance, NULL);
 
@@ -981,10 +1001,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         return 0;
     }
 
-    // Set correct client size based on zoom factor
     ApplyZoomWindowSize(g_hWndMain);
 
-    // Initialize System Tray Icon
     ZeroMemory(&g_nid, sizeof(g_nid));
     g_nid.cbSize = sizeof(g_nid);
     g_nid.hWnd = g_hWndMain;
@@ -1002,7 +1020,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     }
     Shell_NotifyIconW(NIM_ADD, &g_nid);
 
-    // Show window on launch unless --minimized passed
     if (lpCmdLine && wcsstr(lpCmdLine, L"--minimized")) {
         ShowWindow(g_hWndMain, SW_HIDE);
     } else {
@@ -1010,7 +1027,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         UpdateWindow(g_hWndMain);
     }
 
-    // Message loop
     MSG msg;
     while (GetMessageW(&msg, NULL, 0, 0)) {
         TranslateMessage(&msg);
