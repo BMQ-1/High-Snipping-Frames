@@ -48,8 +48,8 @@ if %ERRORLEVEL% neq 0 (
     exit /b 1
 )
 
-echo [5/5] Compiling HighSnippingFramesGUI.exe (Control Center & Tray App)...
-g++ -O2 -mwindows -municode -o ..\bin\HighSnippingFramesGUI.exe ..\src\HighSnippingFramesGUI.cpp ..\src\resource.res -lcomctl32 -ldwmapi -lshell32 -static -s
+echo [5/5] Compiling HighSnippingFramesGUI.exe (Native Modern UI ^& Tray App)...
+g++ -O2 -mwindows -municode -o ..\bin\HighSnippingFramesGUI.exe ..\src\HighSnippingFramesGUI.cpp ..\src\resource.res -lgdiplus -ldwmapi -lshell32 -static -s
 if %ERRORLEVEL% neq 0 (
     echo Failed to build HighSnippingFramesGUI.exe
     exit /b 1
