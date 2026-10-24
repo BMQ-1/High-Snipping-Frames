@@ -146,31 +146,143 @@ static BOOL IsAutoStartEnabled() {
         WCHAR path[MAX_PATH];
         DWORD len = sizeof(path);
         DWORD type = 0;
-        LSTATUS status = RegQueryValueExW(hKey, L"SnippingToolHighFPSDaemon", NULL, &type, (LPBYTE)path, &len);
+        LSTATUS status = RegQueryValueExW(hKey, L"HighSnippingFrames", NULL, &type, (LPBYTE)path, &len);
         RegCloseKey(hKey);
         return (status == ERROR_SUCCESS);
     }
     return FALSE;
 }
 
-// Helper: Set AutoStart in HKCU Run
+// Helper: Set AutoStart in HKCU Run (Single Unified Entry)
 static void SetAutoStart(BOOL enable) {
     HKEY hKey;
     if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
         if (enable) {
-            WCHAR daemonPath[MAX_PATH];
-            swprintf(daemonPath, MAX_PATH, L"\"C:\\Program Files\\SnippingToolHighFPS\\SnippingToolDaemon.exe\"");
-            RegSetValueExW(hKey, L"SnippingToolHighFPSDaemon", 0, REG_SZ, (const BYTE*)daemonPath, (DWORD)(wcslen(daemonPath) + 1) * sizeof(WCHAR));
-
             WCHAR guiPath[MAX_PATH];
             swprintf(guiPath, MAX_PATH, L"\"C:\\Program Files\\SnippingToolHighFPS\\HighSnippingFramesGUI.exe\" --minimized");
-            RegSetValueExW(hKey, L"HighSnippingFramesGUI", 0, REG_SZ, (const BYTE*)guiPath, (DWORD)(wcslen(guiPath) + 1) * sizeof(WCHAR));
+            RegSetValueExW(hKey, L"HighSnippingFrames", 0, REG_SZ, (const BYTE*)guiPath, (DWORD)(wcslen(guiPath) + 1) * sizeof(WCHAR));
         } else {
-            RegDeleteValueW(hKey, L"SnippingToolHighFPSDaemon");
-            RegDeleteValueW(hKey, L"HighSnippingFramesGUI");
+            RegDeleteValueW(hKey, L"HighSnippingFrames");
         }
+        // Always clean up legacy daemon entries to ensure ONLY ONE instance ever runs
+        RegDeleteValueW(hKey, L"SnippingToolHighFPSDaemon");
+        RegDeleteValueW(hKey, L"HighSnippingFramesGUI");
         RegCloseKey(hKey);
     }
+}
+
+// -------------------------------------------------------------
+// Integrated Background Injection Watcher (Unified Engine)
+// -------------------------------------------------------------
+static volatile BOOL g_bWatcherRunning = TRUE;
+static HANDLE g_hWatcherThread = NULL;
+
+static void LocateDllPath(WCHAR* outPath) {
+    WCHAR selfDir[MAX_PATH];
+    GetModuleFileNameW(NULL, selfDir, MAX_PATH);
+    WCHAR* pSlash = wcsrchr(selfDir, L'\\');
+    if (pSlash) *pSlash = L'\0';
+
+    swprintf(outPath, MAX_PATH, L"%s\\SnippingToolHighFPS.dll", selfDir);
+    if (GetFileAttributesW(outPath) == INVALID_FILE_ATTRIBUTES) {
+        wcscpy(outPath, L"C:\\Program Files\\SnippingToolHighFPS\\SnippingToolHighFPS.dll");
+    }
+    if (GetFileAttributesW(outPath) == INVALID_FILE_ATTRIBUTES) {
+        wcscpy(outPath, L"C:\\AntiGravity\\PC Tool\\Snipping Tool high FPS\\bin\\SnippingToolHighFPS.dll");
+    }
+}
+
+static BOOL IsModuleLoaded(DWORD pid, const WCHAR* modName) {
+    HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
+    if (hSnap == INVALID_HANDLE_VALUE) return FALSE;
+    MODULEENTRY32W me;
+    me.dwSize = sizeof(me);
+    BOOL found = FALSE;
+    if (Module32FirstW(hSnap, &me)) {
+        do {
+            if (_wcsicmp(me.szModule, modName) == 0) {
+                found = TRUE;
+                break;
+            }
+        } while (Module32NextW(hSnap, &me));
+    }
+    CloseHandle(hSnap);
+    return found;
+}
+
+static BOOL InjectDLL(DWORD pid, const WCHAR* dllPath) {
+    if (GetFileAttributesW(dllPath) == INVALID_FILE_ATTRIBUTES) return FALSE;
+
+    HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
+    if (!hProcess) return FALSE;
+
+    SIZE_T pathBytes = (wcslen(dllPath) + 1) * sizeof(WCHAR);
+    LPVOID pRemoteBuf = VirtualAllocEx(hProcess, NULL, pathBytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!pRemoteBuf) {
+        CloseHandle(hProcess);
+        return FALSE;
+    }
+
+    if (!WriteProcessMemory(hProcess, pRemoteBuf, dllPath, pathBytes, NULL)) {
+        VirtualFreeEx(hProcess, pRemoteBuf, 0, MEM_RELEASE);
+        CloseHandle(hProcess);
+        return FALSE;
+    }
+
+    HMODULE hKernel32 = GetModuleHandleW(L"kernel32.dll");
+    LPTHREAD_START_ROUTINE pLoadLibraryW = (LPTHREAD_START_ROUTINE)GetProcAddress(hKernel32, "LoadLibraryW");
+    if (!pLoadLibraryW) {
+        VirtualFreeEx(hProcess, pRemoteBuf, 0, MEM_RELEASE);
+        CloseHandle(hProcess);
+        return FALSE;
+    }
+
+    HANDLE hThread = CreateRemoteThread(hProcess, NULL, 0, pLoadLibraryW, pRemoteBuf, 0, NULL);
+    if (!hThread) {
+        VirtualFreeEx(hProcess, pRemoteBuf, 0, MEM_RELEASE);
+        CloseHandle(hProcess);
+        return FALSE;
+    }
+
+    WaitForSingleObject(hThread, 3000);
+    DWORD exitCode = 0;
+    GetExitCodeThread(hThread, &exitCode);
+    CloseHandle(hThread);
+
+    VirtualFreeEx(hProcess, pRemoteBuf, 0, MEM_RELEASE);
+    CloseHandle(hProcess);
+
+    return (exitCode != 0 && exitCode != 0xC0000409);
+}
+
+static void ScanAndInject(const WCHAR* dllPath) {
+    HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (hSnap == INVALID_HANDLE_VALUE) return;
+
+    PROCESSENTRY32W pe;
+    pe.dwSize = sizeof(pe);
+
+    if (Process32FirstW(hSnap, &pe)) {
+        do {
+            if (_wcsicmp(pe.szExeFile, L"SnippingTool.exe") == 0) {
+                if (!IsModuleLoaded(pe.th32ProcessID, L"SnippingToolHighFPS.dll")) {
+                    InjectDLL(pe.th32ProcessID, dllPath);
+                }
+            }
+        } while (Process32NextW(hSnap, &pe));
+    }
+    CloseHandle(hSnap);
+}
+
+static DWORD WINAPI WatcherThreadProc(LPVOID lpParam) {
+    WCHAR dllPath[MAX_PATH];
+    LocateDllPath(dllPath);
+
+    while (g_bWatcherRunning) {
+        ScanAndInject(dllPath);
+        Sleep(250);
+    }
+    return 0;
 }
 
 // Helper: Read Settings from INI
@@ -454,14 +566,12 @@ static void RenderUI(Graphics& g, int clientWidth, int clientHeight) {
     g.DrawString(L"ACTIVE RECORDING TARGET", -1, &fontSection, PointF(32.0f, 120.0f), &brAccentLight);
 
     // Right Side: Live System Details
-    DWORD daemonPid = FindProcessPID(L"SnippingToolDaemon.exe");
     DWORD snipPid   = FindProcessPID(L"SnippingTool.exe");
 
     RectF rcHeroRight(BASE_WIDTH - 210.0f, 80.0f, 180.0f, 64.0f);
     WCHAR sysInfo[128];
-    swprintf(sysInfo, 128, L"Display: %u Hz\nDaemon: %s\nSnipping Tool: %s",
+    swprintf(sysInfo, 128, L"Display: %u Hz\nEngine: Active (Unified)\nSnipping Tool: %s",
              maxRefresh,
-             (daemonPid != 0 ? L"Active" : L"Inactive"),
              (snipPid != 0 ? L"Hooked & Ready" : L"Idle"));
     g.DrawString(sysInfo, -1, &fontSmall, rcHeroRight, &sfLeft, &brTextDim);
 
@@ -717,7 +827,7 @@ static void ShowTrayMenu(HWND hWnd) {
     AppendMenuW(hMenu, MF_STRING, IDM_ANALYZE, L"Verify Latest Video");
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(hMenu, MF_STRING, IDM_RESET_ZOOM, L"Reset Zoom to 100%");
-    AppendMenuW(hMenu, MF_STRING, IDM_RESTART_SVC, L"Restart Daemon Service");
+    AppendMenuW(hMenu, MF_STRING, IDM_RESTART_SVC, L"Rescan Snipping Tool");
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(hMenu, MF_STRING, IDM_EXIT, L"Exit");
 
@@ -905,22 +1015,10 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
                     break;
 
                 case IDM_RESTART_SVC: {
-                    HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-                    if (hSnap != INVALID_HANDLE_VALUE) {
-                        PROCESSENTRY32W pe = { sizeof(pe) };
-                        if (Process32FirstW(hSnap, &pe)) {
-                            do {
-                                if (_wcsicmp(pe.szExeFile, L"SnippingToolDaemon.exe") == 0) {
-                                    HANDLE hProc = OpenProcess(PROCESS_TERMINATE, FALSE, pe.th32ProcessID);
-                                    if (hProc) { TerminateProcess(hProc, 0); CloseHandle(hProc); }
-                                }
-                            } while (Process32NextW(hSnap, &pe));
-                        }
-                        CloseHandle(hSnap);
-                    }
-                    Sleep(300);
-                    ShellExecuteW(NULL, L"open", L"C:\\Program Files\\SnippingToolHighFPS\\SnippingToolDaemon.exe", NULL, NULL, SW_HIDE);
-                    MessageBoxW(hWnd, L"High Snipping Frames background daemon restarted.", L"Service", MB_ICONINFORMATION);
+                    WCHAR dllPath[MAX_PATH];
+                    LocateDllPath(dllPath);
+                    ScanAndInject(dllPath);
+                    MessageBoxW(hWnd, L"High Snipping Frames unified injection engine rescanned and verified.", L"High Snipping Frames", MB_ICONINFORMATION);
                     InvalidateRect(hWnd, NULL, FALSE);
                     break;
                 }
@@ -948,6 +1046,14 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             return 0;
 
         case WM_DESTROY:
+            if (g_bWatcherRunning) {
+                g_bWatcherRunning = FALSE;
+                if (g_hWatcherThread) {
+                    WaitForSingleObject(g_hWatcherThread, 1500);
+                    CloseHandle(g_hWatcherThread);
+                    g_hWatcherThread = NULL;
+                }
+            }
             Shell_NotifyIconW(NIM_DELETE, &g_nid);
             PostQuitMessage(0);
             break;
@@ -1019,6 +1125,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         swprintf(g_nid.szTip, 128, L"High Snipping Frames - %u FPS", g_CurrentFPS);
     }
     Shell_NotifyIconW(NIM_ADD, &g_nid);
+
+    // Start the unified background injection watcher thread
+    g_bWatcherRunning = TRUE;
+    g_hWatcherThread = CreateThread(NULL, 0, WatcherThreadProc, NULL, 0, NULL);
 
     if (lpCmdLine && wcsstr(lpCmdLine, L"--minimized")) {
         ShowWindow(g_hWndMain, SW_HIDE);

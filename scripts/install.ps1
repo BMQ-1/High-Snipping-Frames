@@ -1,10 +1,10 @@
 # High Snipping Frames - Installer Script
-# Installs background injector, control center GUI, Start Menu shortcut, and autostart
+# Installs unified Control Center GUI (with integrated background watcher), Start Menu shortcut, and autostart
 
 $ErrorActionPreference = "Stop"
 
 Write-Host "=======================================================" -ForegroundColor Cyan
-Write-Host "       High Snipping Frames - Installer v2.0           " -ForegroundColor Cyan
+Write-Host "       High Snipping Frames - Installer v2.1           " -ForegroundColor Cyan
 Write-Host "=======================================================" -ForegroundColor Cyan
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -23,9 +23,9 @@ if (-not (Test-Path $installDir)) {
     }
 }
 
-Write-Host "[1/5] Stopping running instances..." -ForegroundColor Yellow
+Write-Host "[1/5] Stopping any running instances..." -ForegroundColor Yellow
 Stop-Process -Name "SnippingToolDaemon", "HighSnippingFramesGUI" -Force -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 300
+Start-Sleep -Milliseconds 400
 
 Write-Host "[2/5] Deploying binaries to $installDir..." -ForegroundColor Yellow
 $filesToDeploy = @(
@@ -60,16 +60,18 @@ try {
     Write-Host "      Could not create shortcut (skipping)" -ForegroundColor Gray
 }
 
-Write-Host "[5/5] Configuring auto-start in HKCU Run..." -ForegroundColor Yellow
-$daemonExe = Join-Path $installDir "SnippingToolDaemon.exe"
+Write-Host "[5/5] Configuring unified auto-start in HKCU Run..." -ForegroundColor Yellow
 $guiExe = Join-Path $installDir "HighSnippingFramesGUI.exe"
 
-Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "SnippingToolHighFPSDaemon" -Value ('"' + $daemonExe + '"')
-Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "HighSnippingFramesGUI" -Value ('"' + $guiExe + '" --minimized')
+# Clean up legacy dual-process startup entries
+Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "SnippingToolHighFPSDaemon" -ErrorAction SilentlyContinue
+Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "HighSnippingFramesGUI" -ErrorAction SilentlyContinue
 
-# Launch daemon using WMI to detach from PowerShell job object
-([wmiclass]"win32_process").Create($daemonExe) | Out-Null
-([wmiclass]"win32_process").Create($guiExe) | Out-Null
+# Register unified single-instance Control Center
+Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "HighSnippingFrames" -Value ('"' + $guiExe + '" --minimized')
+
+# Launch unified Control Center detached from script
+([wmiclass]"win32_process").Create('"' + $guiExe + '" --minimized') | Out-Null
 
 Write-Host "`nHigh Snipping Frames installed and launched successfully!" -ForegroundColor Green
-Write-Host "Control Center is now available in your System Tray and Start Menu." -ForegroundColor Green
+Write-Host "Unified engine is active in your System Tray and Start Menu (single instance)." -ForegroundColor Green

@@ -33,13 +33,15 @@ It now includes a lightweight, modern **Windows 11 Fluent System Tray & Control 
 - **Native Hardware Encoding:** Encodes video directly at your chosen target frame rate (up to 240 FPS) with hardware-accelerated Media Foundation encoding and synchronized audio.
 - **Modern Control Center GUI (`HighSnippingFramesGUI.exe`):**
   - Lives in your System Tray with the official High Snipping Frames icon.
+  - **Unified Single-Process Architecture:** Houses both the Fluent Control Center and the background injection watcher in a single lightweight process (< 15 MB RAM, 0% CPU) with single-instance enforcement.
+  - **Dynamic UI Zoom (`Ctrl + Mouse Wheel`):** Scale the UI smoothly from 80% to 200% on high-DPI displays or adjust using on-screen zoom pills.
   - Switch FPS on the fly with 1-click presets: **Auto (Match Display)**, **60 FPS**, **90 FPS**, **120 FPS**, **144 FPS**, **165 FPS**, **240 FPS**.
   - **Dynamic In-Memory Config Reloading:** Changes take effect immediately on your very next recording without needing to restart Snipping Tool!
   - **Built-in Video Analyzer:** Runs `ffprobe` on your latest recording and displays container FPS, average FPS, frame count, and duration directly inside the UI.
   - **One-Click Shortcuts:** Quick buttons to launch Snipping Tool or open your `Videos\Screen Recordings` folder.
 - **100% Update Proof:** Zero files are modified inside `C:\Program Files\WindowsApps\...`. All patches are applied dynamically in RAM using relative byte pattern scanning (AOB), meaning Microsoft Store package updates will never break or overwrite your setup.
 - **Zero Freeze on Screenshots:** `Win + Shift + S` snips remain 100% stock, instant, and never freeze.
-- **Ultra-Lightweight Watcher:** Background daemon service uses `< 4 MB` RAM and `0.0%` CPU, automatically hooking Snipping Tool whenever it launches.
+- **Ultra-Lightweight Background Watcher:** Integrated background watcher thread uses 0.0% CPU, automatically hooking Snipping Tool whenever it launches. Standalone headless daemon (`SnippingToolDaemon.exe`) is also included for zero-GUI environments.
 
 ---
 
@@ -101,7 +103,7 @@ The installer will:
 1. Deploy binaries to `C:\Program Files\SnippingToolHighFPS\`
 2. Configure AppContainer execution permissions
 3. Create a **Start Menu** shortcut (`High Snipping Frames`)
-4. Register the background watcher and Control Center in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
+4. Register the unified Control Center in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` (Single Startup Instance)
 5. Launch the Control Center in your System Tray
 
 ---
