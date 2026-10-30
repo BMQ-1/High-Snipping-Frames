@@ -24,7 +24,7 @@ if (-not (Test-Path $installDir)) {
 }
 
 Write-Host "[1/5] Stopping any running instances..." -ForegroundColor Yellow
-Stop-Process -Name "SnippingToolDaemon", "HighSnippingFramesGUI" -Force -ErrorAction SilentlyContinue
+Stop-Process -Name "SnippingToolDaemon", "HighSnippingFramesGUI", "SnippingTool" -Force -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 400
 
 Write-Host "[2/5] Deploying binaries to $installDir..." -ForegroundColor Yellow
