@@ -96,7 +96,7 @@ static void LocateIniPath() {
         wcscpy(g_IniPath, L"C:\\Program Files\\SnippingToolHighFPS\\SnippingToolHighFPS.ini");
     }
     if (GetFileAttributesW(g_IniPath) == INVALID_FILE_ATTRIBUTES) {
-        wcscpy(g_IniPath, L"C:\\AntiGravity\\PC Tool\\Snipping Tool high FPS\\bin\\SnippingToolHighFPS.ini");
+        wcscpy(g_IniPath, L"C:\\AntiGravity\\PC Tool\\Snipping Tool high FPS\\High-Snipping-Frames\\bin\\SnippingToolHighFPS.ini");
     }
 }
 
@@ -188,7 +188,7 @@ static void LocateDllPath(WCHAR* outPath) {
         wcscpy(outPath, L"C:\\Program Files\\SnippingToolHighFPS\\SnippingToolHighFPS.dll");
     }
     if (GetFileAttributesW(outPath) == INVALID_FILE_ATTRIBUTES) {
-        wcscpy(outPath, L"C:\\AntiGravity\\PC Tool\\Snipping Tool high FPS\\bin\\SnippingToolHighFPS.dll");
+        wcscpy(outPath, L"C:\\AntiGravity\\PC Tool\\Snipping Tool high FPS\\High-Snipping-Frames\\bin\\SnippingToolHighFPS.dll");
     }
 }
 

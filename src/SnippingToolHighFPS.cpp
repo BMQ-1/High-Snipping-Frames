@@ -77,7 +77,7 @@ static void LoadConfig(HMODULE hMod) {
         wcscpy(iniPath, L"C:\\Program Files\\SnippingToolHighFPS\\SnippingToolHighFPS.ini");
     }
     if (GetFileAttributesW(iniPath) == INVALID_FILE_ATTRIBUTES) {
-        wcscpy(iniPath, L"C:\\AntiGravity\\PC Tool\\Snipping Tool high FPS\\bin\\SnippingToolHighFPS.ini");
+        wcscpy(iniPath, L"C:\\AntiGravity\\PC Tool\\Snipping Tool high FPS\\High-Snipping-Frames\\bin\\SnippingToolHighFPS.ini");
     }
 
     // Write log to AppData Local Temp (always writable by packaged apps)

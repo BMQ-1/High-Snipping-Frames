@@ -147,7 +147,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         wcscpy(dllPath, L"C:\\Program Files\\SnippingToolHighFPS\\SnippingToolHighFPS.dll");
     }
     if (GetFileAttributesW(dllPath) == INVALID_FILE_ATTRIBUTES) {
-        wcscpy(dllPath, L"C:\\AntiGravity\\PC Tool\\Snipping Tool high FPS\\bin\\SnippingToolHighFPS.dll");
+        wcscpy(dllPath, L"C:\\AntiGravity\\PC Tool\\Snipping Tool high FPS\\High-Snipping-Frames\\bin\\SnippingToolHighFPS.dll");
     }
 
     Log("[SnippingToolDaemon] Monitoring for SnippingTool.exe (Target DLL: %ls)", dllPath);

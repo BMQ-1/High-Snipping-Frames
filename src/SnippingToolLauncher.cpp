@@ -115,7 +115,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     WCHAR dllPath[MAX_PATH];
     swprintf(dllPath, MAX_PATH, L"%s\\SnippingToolHighFPS.dll", selfDir);
     if (GetFileAttributesW(dllPath) == INVALID_FILE_ATTRIBUTES) {
-        wcscpy(dllPath, L"C:\\AntiGravity\\PC Tool\\Snipping Tool high FPS\\bin\\SnippingToolHighFPS.dll");
+        wcscpy(dllPath, L"C:\\AntiGravity\\PC Tool\\Snipping Tool high FPS\\High-Snipping-Frames\\bin\\SnippingToolHighFPS.dll");
     }
 
     int argc = 0;
