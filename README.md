@@ -84,27 +84,33 @@ flowchart TD
 
 ---
 
-## Quick Start (Installation)
+## Quick Start (1-Click Installation)
 
-### 1-Click Automated Install (PowerShell)
+### Method 1: Just Double-Click `install.bat` (Recommended)
 
-Open PowerShell and run:
+1. Clone or download this repository:
+   ```cmd
+   git clone https://github.com/your-username/High-Snipping-Frames.git
+   cd High-Snipping-Frames
+   ```
+2. Double-click **`install.bat`** (or run it from CMD).
+
+That's it! It automatically:
+- Deploys pre-compiled x64 binaries to `C:\Program Files\SnippingToolHighFPS\`.
+- Grants AppContainer execution permissions.
+- Creates a **Start Menu** shortcut (`High Snipping Frames`).
+- Adds a single auto-start entry in your user registry so it silently stays ready across reboots.
+- Launches the Control Center directly into your System Tray.
+
+By default, it automatically matches your monitor's native refresh rate (e.g. 144 Hz / 144 FPS). Snipping Tool will now record at high FPS immediately!
+
+---
+
+### Method 2: PowerShell
 
 ```powershell
-# Clone or download the repository
-git clone https://github.com/your-username/High-Snipping-Frames.git
-cd High-Snipping-Frames
-
-# Run the installer
 .\scripts\install.ps1
 ```
-
-The installer will:
-1. Deploy binaries to `C:\Program Files\SnippingToolHighFPS\`
-2. Configure AppContainer execution permissions
-3. Create a **Start Menu** shortcut (`High Snipping Frames`)
-4. Register the unified Control Center in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` (Single Startup Instance)
-5. Launch the Control Center in your System Tray
 
 ---
 
@@ -165,9 +171,10 @@ All 4 binaries with embedded icon resources will be generated into the `bin\` fo
 
 To completely remove High Snipping Frames and restore Windows Snipping Tool to stock:
 
-```powershell
-.\scripts\uninstall.ps1
-```
+- Simply double-click **`uninstall.bat`**, OR run:
+  ```powershell
+  .\scripts\uninstall.ps1
+  ```
 
 ---
 
