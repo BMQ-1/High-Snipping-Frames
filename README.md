@@ -1,11 +1,13 @@
 <p align="center">
+  <sub><code>assets/icon.svg</code></sub><br />
   <img src="assets/icon.svg" width="130" height="130" alt="High Snipping Frames Logo" />
 </p>
 
 <h1 align="center">High Snipping Frames</h1>
 
 <p align="center">
-  <strong>Native 60, 120, and 144+ FPS Screen Recording for Windows Snipping Tool</strong>
+  <strong>Native 60, 120, and 144+ FPS Screen Recording for Windows Snipping Tool</strong><br />
+  <sub>Code created by AI</sub>
 </p>
 
 <p align="center">
@@ -181,3 +183,9 @@ To completely remove High Snipping Frames and restore Windows Snipping Tool to s
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
+
+---
+
+<p align="center">
+  <sub><em>Note: This project, reverse engineering, and code were created by AI.</em></sub>
+</p>
