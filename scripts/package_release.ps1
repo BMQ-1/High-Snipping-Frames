@@ -7,7 +7,7 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $repoDir = Split-Path -Parent $scriptDir
 $distDir = Join-Path $repoDir "dist"
 $tempStageDir = Join-Path $distDir "High-Snipping-Frames-Portable"
-$zipOutput = Join-Path $distDir "High-Snipping-Frames-v2.2-Portable.zip"
+$zipOutput = Join-Path $distDir "High-Snipping-Frames-v1.0-Portable.zip"
 
 Write-Host "=======================================================" -ForegroundColor Cyan
 Write-Host "       High Snipping Frames - Packaging Release        " -ForegroundColor Cyan

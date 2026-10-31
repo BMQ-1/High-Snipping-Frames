@@ -4,7 +4,7 @@
 $ErrorActionPreference = "Stop"
 
 Write-Host "=======================================================" -ForegroundColor Cyan
-Write-Host "       High Snipping Frames - Installer v2.1           " -ForegroundColor Cyan
+Write-Host "       High Snipping Frames - Installer v1.0           " -ForegroundColor Cyan
 Write-Host "=======================================================" -ForegroundColor Cyan
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition

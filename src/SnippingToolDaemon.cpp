@@ -128,7 +128,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         swprintf(g_LogPath, MAX_PATH, L"%sSnippingToolDaemon.log", tempPath);
     }
 
-    HANDLE hMutex = CreateMutexW(NULL, TRUE, L"Local\\SnippingToolHighFPSDaemonMutex_v2");
+    HANDLE hMutex = CreateMutexW(NULL, TRUE, L"Local\\SnippingToolHighFPSDaemonMutex_v1");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         Log("[SnippingToolDaemon] Another instance is already running. Exiting.");
         return 0;

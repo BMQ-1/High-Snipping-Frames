@@ -831,7 +831,7 @@ static void RenderUI(Graphics& g, int clientWidth, int clientHeight) {
     SolidBrush brBadge(Color(0x33, 0x33, 0x33));
     FillRoundedRect(g, brBadge, rcTopBadge, 4.0f);
     DrawRoundedRect(g, penBorder, rcTopBadge, 4.0f);
-    g.DrawString(L"v2.1 NATIVE", -1, &fontBadge, rcTopBadge, &sfCenter, &brAccentLight);
+    g.DrawString(L"v1.0 NATIVE", -1, &fontBadge, rcTopBadge, &sfCenter, &brAccentLight);
 
     // 3. HERO CARD: Prominent Live Target Framerate Display
     // Resolves confusion: clearly shows the selected framerate dynamically!
@@ -1473,9 +1473,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     GdiplusStartupInput gdiplusStartupInput;
     GdiplusStartup(&g_gdiplusToken, &gdiplusStartupInput, NULL);
 
-    HANDLE hMutex = CreateMutexW(NULL, TRUE, L"Local\\HighSnippingFramesGUIMutex_v3");
+    HANDLE hMutex = CreateMutexW(NULL, TRUE, L"Local\\HighSnippingFramesGUIMutex_v1");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
-        HWND hExist = FindWindowW(L"HighSnippingFramesGUIClass_v3", NULL);
+        HWND hExist = FindWindowW(L"HighSnippingFramesGUIClass_v1", NULL);
         if (hExist) {
             ShowWindow(hExist, SW_SHOW);
             SetForegroundWindow(hExist);
@@ -1489,7 +1489,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     WNDCLASSEXW wc = { sizeof(wc) };
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hInstance;
-    wc.lpszClassName = L"HighSnippingFramesGUIClass_v3";
+    wc.lpszClassName = L"HighSnippingFramesGUIClass_v1";
     wc.hCursor = LoadCursorW(NULL, IDC_ARROW);
     wc.hIcon = LoadIconW(hInstance, MAKEINTRESOURCEW(1));
     wc.hIconSm = LoadIconW(hInstance, MAKEINTRESOURCEW(1));
@@ -1500,7 +1500,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     int x = (GetSystemMetrics(SM_CXSCREEN) - w) / 2;
     int y = (GetSystemMetrics(SM_CYSCREEN) - h) / 2;
 
-    g_hWndMain = CreateWindowExW(WS_EX_APPWINDOW, L"HighSnippingFramesGUIClass_v3",
+    g_hWndMain = CreateWindowExW(WS_EX_APPWINDOW, L"HighSnippingFramesGUIClass_v1",
                                  L"High Snipping Frames",
                                  WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
                                  x, y, w, h, NULL, NULL, hInstance, NULL);
