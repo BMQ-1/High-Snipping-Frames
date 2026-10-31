@@ -37,6 +37,8 @@ using namespace Gdiplus;
 #define IDM_STORAGE_CHECK 3026
 #define IDM_EXIT          3025
 
+#define HOTKEY_RECORD_VIDEO 2001
+
 // Internal Timers
 #define TIMER_SLEEP_RECOVERY    4001
 #define TIMER_STORAGE_GUARDIAN  4002
@@ -72,6 +74,10 @@ static DWORD g_MaxFolderSizeGB         = 15;        // Alert if folder exceeds s
 static DWORD g_TransferDays            = 0;         // Transfer recordings older than X days to Folder X (0 = disabled)
 static WCHAR g_TransferFolder[MAX_PATH] = { 0 };    // Destination Folder X
 static DWORD g_AutoCleanDays           = 0;         // Auto-delete recordings older than X days (0 = disabled)
+
+// Part 3: Instant Video Hotkey & Clipboard Fast-Share
+static BOOL  g_EnableGlobalHotkey      = TRUE;      // Win + Alt + R
+static BOOL  g_AutoCopyToClipboard     = TRUE;      // Automatically put fresh MP4 into Windows clipboard
 
 // Hit test IDs (in base logical coordinates)
 #define HIT_NONE           0
@@ -206,6 +212,91 @@ static void LocateDllPath(WCHAR* outPath) {
     }
 }
 
+// Copies file path to Windows Clipboard using CF_HDROP format (instant paste in Discord/Slack)
+static BOOL CopyFileToClipboard(const WCHAR* filePath) {
+    if (!filePath || GetFileAttributesW(filePath) == INVALID_FILE_ATTRIBUTES) return FALSE;
+
+    if (!OpenClipboard(NULL)) return FALSE;
+    EmptyClipboard();
+
+    SIZE_T len = wcslen(filePath);
+    SIZE_T dropFilesSize = sizeof(DROPFILES) + (len + 2) * sizeof(WCHAR);
+
+    HGLOBAL hGlobal = GlobalAlloc(GHND, dropFilesSize);
+    if (!hGlobal) {
+        CloseClipboard();
+        return FALSE;
+    }
+
+    DROPFILES* pDropFiles = (DROPFILES*)GlobalLock(hGlobal);
+    if (!pDropFiles) {
+        GlobalFree(hGlobal);
+        CloseClipboard();
+        return FALSE;
+    }
+
+    pDropFiles->pFiles = sizeof(DROPFILES);
+    pDropFiles->pt.x = 0;
+    pDropFiles->pt.y = 0;
+    pDropFiles->fNC = FALSE;
+    pDropFiles->fWide = TRUE;
+
+    WCHAR* pData = (WCHAR*)((BYTE*)pDropFiles + sizeof(DROPFILES));
+    wcscpy(pData, filePath);
+    pData[len + 1] = L'\0';
+
+    GlobalUnlock(hGlobal);
+
+    SetClipboardData(CF_HDROP, hGlobal);
+    CloseClipboard();
+    return TRUE;
+}
+
+static void AutoCopyLatestRecordingToClipboard(HWND hWnd) {
+    WCHAR userProfile[MAX_PATH];
+    if (!GetEnvironmentVariableW(L"USERPROFILE", userProfile, MAX_PATH)) return;
+
+    WCHAR searchPath[MAX_PATH];
+    swprintf(searchPath, MAX_PATH, L"%s\\Videos\\Screen Recordings\\*.mp4", userProfile);
+
+    WIN32_FIND_DATAW wfd;
+    HANDLE hFind = FindFirstFileW(searchPath, &wfd);
+    if (hFind == INVALID_HANDLE_VALUE) return;
+
+    FILETIME latestTime = wfd.ftLastWriteTime;
+    WCHAR latestFile[MAX_PATH];
+    swprintf(latestFile, MAX_PATH, L"%s\\Videos\\Screen Recordings\\%s", userProfile, wfd.cFileName);
+
+    while (FindNextFileW(hFind, &wfd)) {
+        if (CompareFileTime(&wfd.ftLastWriteTime, &latestTime) > 0) {
+            latestTime = wfd.ftLastWriteTime;
+            swprintf(latestFile, MAX_PATH, L"%s\\Videos\\Screen Recordings\\%s", userProfile, wfd.cFileName);
+        }
+    }
+    FindClose(hFind);
+
+    FILETIME nowFt;
+    GetSystemTimeAsFileTime(&nowFt);
+    ULARGE_INTEGER uNow, uFile;
+    uNow.LowPart = nowFt.dwLowDateTime; uNow.HighPart = nowFt.dwHighDateTime;
+    uFile.LowPart = latestTime.dwLowDateTime; uFile.HighPart = latestTime.dwHighDateTime;
+    ULONGLONG diffSec = (uNow.QuadPart > uFile.QuadPart) ? ((uNow.QuadPart - uFile.QuadPart) / 10000000ULL) : 0;
+
+    if (diffSec <= 90) {
+        if (CopyFileToClipboard(latestFile)) {
+            ZeroMemory(&g_nid, sizeof(g_nid));
+            g_nid.cbSize = sizeof(g_nid);
+            g_nid.hWnd = hWnd;
+            g_nid.uID = ID_TRAY_APP_ICON;
+            g_nid.uFlags = NIF_INFO;
+            swprintf(g_nid.szInfoTitle, 64, L"High Snipping Frames");
+            swprintf(g_nid.szInfo, 256, L"Recording copied to clipboard!\nReady to paste (Ctrl+V) directly into Discord or Slack.");
+            g_nid.dwInfoFlags = NIIF_INFO;
+            Shell_NotifyIconW(NIM_MODIFY, &g_nid);
+        }
+    }
+}
+
 static BOOL IsModuleLoaded(DWORD pid, const WCHAR* modName) {
     HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
     if (hSnap == INVALID_HANDLE_VALUE) return FALSE;
@@ -284,6 +375,12 @@ static void ScanAndInject(const WCHAR* dllPath) {
         CloseHandle(g_hInjectedProc);
         g_hInjectedProc = NULL;
         g_InjectedPID = 0;
+
+        // Snipping Tool has finished recording: auto-copy to clipboard for fast sharing
+        if (g_AutoCopyToClipboard && g_hWndMain) {
+            Sleep(500); // Give Snipping Tool a brief moment to finish writing file header
+            AutoCopyLatestRecordingToClipboard(g_hWndMain);
+        }
     }
 
     HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -356,6 +453,10 @@ static void LoadSettings() {
     g_TransferDays          = GetPrivateProfileIntW(L"StorageGuardian", L"TransferDays", 0, g_IniPath);
     GetPrivateProfileStringW(L"StorageGuardian", L"TransferFolder", L"", g_TransferFolder, MAX_PATH, g_IniPath);
     g_AutoCleanDays         = GetPrivateProfileIntW(L"StorageGuardian", L"AutoCleanDays", 0, g_IniPath);
+
+    // Part 3 Settings
+    g_EnableGlobalHotkey    = GetPrivateProfileIntW(L"Settings", L"EnableGlobalHotkey", 1, g_IniPath);
+    g_AutoCopyToClipboard   = GetPrivateProfileIntW(L"Settings", L"AutoCopyToClipboard", 1, g_IniPath);
 }
 
 // Helper: Write Settings to INI
@@ -1068,7 +1169,7 @@ static void ShowTrayMenu(HWND hWnd) {
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
 
     // 3. Quick Actions
-    AppendMenuW(hMenu, MF_STRING, IDM_RECORD,  L"Record Screen (Snipping Tool)");
+    AppendMenuW(hMenu, MF_STRING, IDM_RECORD,  L"Record Screen (Win + Alt + R)");
     AppendMenuW(hMenu, MF_STRING, IDM_FOLDER,  L"Open Recordings Folder");
     AppendMenuW(hMenu, MF_STRING, IDM_ANALYZE, L"Verify Latest Video");
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
@@ -1135,6 +1236,13 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             } else if (wParam == TIMER_STORAGE_STARTUP) {
                 KillTimer(hWnd, TIMER_STORAGE_STARTUP);
                 RunStorageGuardian(hWnd, FALSE);
+            }
+            break;
+        }
+
+        case WM_HOTKEY: {
+            if (wParam == HOTKEY_RECORD_VIDEO) {
+                LaunchSnippingTool();
             }
             break;
         }
@@ -1347,6 +1455,9 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
                     g_hWatcherThread = NULL;
                 }
             }
+            if (g_EnableGlobalHotkey) {
+                UnregisterHotKey(hWnd, HOTKEY_RECORD_VIDEO);
+            }
             Shell_NotifyIconW(NIM_DELETE, &g_nid);
             PostQuitMessage(0);
             break;
@@ -1419,6 +1530,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         swprintf(g_nid.szTip, 128, L"High Snipping Frames - %u FPS", g_CurrentFPS);
     }
     Shell_NotifyIconW(NIM_ADD, &g_nid);
+
+    // Register Global Instant Video Hotkey (Win + Alt + R)
+    if (g_EnableGlobalHotkey && g_hWndMain) {
+        RegisterHotKey(g_hWndMain, HOTKEY_RECORD_VIDEO, MOD_WIN | MOD_ALT | MOD_NOREPEAT, 'R');
+    }
 
     // Start the unified background injection watcher thread
     g_bWatcherRunning = TRUE;

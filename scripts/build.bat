@@ -28,7 +28,7 @@ if %ERRORLEVEL% neq 0 (
 )
 
 echo [2/5] Compiling SnippingToolHighFPS.dll...
-g++ -O2 -shared -o ..\bin\SnippingToolHighFPS.dll ..\src\SnippingToolHighFPS.cpp ..\src\resource.res -lole32 -luuid -static -s
+g++ -O2 -shared -o ..\bin\SnippingToolHighFPS.dll ..\src\SnippingToolHighFPS.cpp ..\src\resource.res -lole32 -luuid -lgdi32 -static -s
 if %ERRORLEVEL% neq 0 (
     echo Failed to build SnippingToolHighFPS.dll
     exit /b 1

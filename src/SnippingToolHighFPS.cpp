@@ -17,7 +17,24 @@ static int    g_BitrateMultiplier = 1; // 0 = Balanced, 1 = High Quality (1.5x),
 static BOOL   g_EnableCompositorUnlock = TRUE;
 static BOOL   g_EnableEncoderUnlock = TRUE;
 static BOOL   g_BypassThrottle = TRUE;
+static BOOL   g_EnableRecordingHUD = TRUE;
+static BOOL   g_PerMonitorAutoMatch = TRUE;
 static WCHAR  g_LogPath[MAX_PATH] = { 0 };
+
+// -------------------------------------------------------------
+// Invisible In-Recording HUD (WDA_EXCLUDEFROMCAPTURE)
+// Displays a sleek pill badge visible to the user's eyes,
+// but 100% invisible in the recorded MP4 file!
+// -------------------------------------------------------------
+static HWND   g_hWndHUD = NULL;
+static HANDLE g_hHudThread = NULL;
+static DWORD  g_HudElapsedSec = 0;
+static UINT32 g_HudFPS = 144;
+static volatile BOOL g_bHudRunning = FALSE;
+
+#ifndef WDA_EXCLUDEFROMCAPTURE
+#define WDA_EXCLUDEFROMCAPTURE 0x00000011
+#endif
 
 static void Log(const char* fmt, ...) {
     char buf[1024];
@@ -62,6 +79,183 @@ static UINT32 DetectPrimaryRefreshRate() {
     return (maxFreq >= 60) ? maxFreq : 144;
 }
 
+// Detect refresh rate of the monitor where the cursor / active recording area is located
+static UINT32 DetectActiveMonitorRefreshRate() {
+    POINT pt;
+    GetCursorPos(&pt);
+    HMONITOR hMon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+    if (hMon) {
+        MONITORINFOEXW mi;
+        ZeroMemory(&mi, sizeof(mi));
+        mi.cbSize = sizeof(mi);
+        if (GetMonitorInfoW(hMon, &mi)) {
+            DEVMODEW dm;
+            ZeroMemory(&dm, sizeof(dm));
+            dm.dmSize = sizeof(dm);
+            if (EnumDisplaySettingsW(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm)) {
+                if (dm.dmDisplayFrequency >= 30 && dm.dmDisplayFrequency <= 500) {
+                    return dm.dmDisplayFrequency;
+                }
+            }
+        }
+    }
+    return DetectPrimaryRefreshRate();
+}
+
+static LRESULT CALLBACK HudWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
+        case WM_CREATE: {
+            SetTimer(hWnd, 1, 1000, NULL); // 1-second elapsed timer
+            break;
+        }
+        case WM_TIMER: {
+            g_HudElapsedSec++;
+            InvalidateRect(hWnd, NULL, FALSE);
+            break;
+        }
+        case WM_PAINT: {
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hWnd, &ps);
+            RECT rc;
+            GetClientRect(hWnd, &rc);
+
+            // Double buffering
+            HDC memDC = CreateCompatibleDC(hdc);
+            HBITMAP memBm = CreateCompatibleBitmap(hdc, rc.right, rc.bottom);
+            HBITMAP oldBm = (HBITMAP)SelectObject(memDC, memBm);
+
+            // Dark rounded pill background
+            HBRUSH brBg = CreateSolidBrush(RGB(22, 22, 22));
+            HBRUSH brOld = (HBRUSH)SelectObject(memDC, brBg);
+            HPEN penBorder = CreatePen(PS_SOLID, 1, RGB(55, 55, 55));
+            HPEN penOld = (HPEN)SelectObject(memDC, penBorder);
+
+            RoundRect(memDC, rc.left, rc.top, rc.right, rc.bottom, 12, 12);
+
+            // Red recording dot
+            HBRUSH brRed = CreateSolidBrush(RGB(255, 59, 48));
+            SelectObject(memDC, brRed);
+            HPEN penRed = CreatePen(PS_SOLID, 1, RGB(255, 59, 48));
+            SelectObject(memDC, penRed);
+            Ellipse(memDC, 10, (rc.bottom - 8) / 2, 18, (rc.bottom + 8) / 2);
+
+            // Text: REC  144 FPS  |  00:12
+            SetBkMode(memDC, TRANSPARENT);
+            SetTextColor(memDC, RGB(240, 240, 240));
+            HFONT hFont = CreateFontW(-11, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                                      DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                      CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+            HFONT oldFont = (HFONT)SelectObject(memDC, hFont);
+
+            WCHAR hudText[64];
+            DWORD mins = g_HudElapsedSec / 60;
+            DWORD secs = g_HudElapsedSec % 60;
+            swprintf(hudText, 64, L"REC  %u FPS  |  %02u:%02u", g_HudFPS, mins, secs);
+
+            RECT rcText = { 24, 0, rc.right - 6, rc.bottom };
+            DrawTextW(memDC, hudText, -1, &rcText, DT_SINGLELINE | DT_VCENTER | DT_LEFT);
+
+            // Copy to screen
+            BitBlt(hdc, 0, 0, rc.right, rc.bottom, memDC, 0, 0, SRCCOPY);
+
+            // Cleanup
+            SelectObject(memDC, oldFont);
+            DeleteObject(hFont);
+            SelectObject(memDC, brOld);
+            DeleteObject(brBg);
+            SelectObject(memDC, penOld);
+            DeleteObject(penBorder);
+            DeleteObject(brRed);
+            DeleteObject(penRed);
+            SelectObject(memDC, oldBm);
+            DeleteObject(memBm);
+            DeleteDC(memDC);
+
+            EndPaint(hWnd, &ps);
+            break;
+        }
+        case WM_DESTROY: {
+            KillTimer(hWnd, 1);
+            break;
+        }
+        default:
+            return DefWindowProcW(hWnd, msg, wParam, lParam);
+    }
+    return 0;
+}
+
+static DWORD WINAPI HudThreadProc(LPVOID lpParam) {
+    WNDCLASSEXW wc = { sizeof(wc) };
+    wc.lpfnWndProc = HudWndProc;
+    wc.hInstance = g_hMod;
+    wc.lpszClassName = L"SnippingToolHighFPS_HUD";
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    RegisterClassExW(&wc);
+
+    POINT pt;
+    GetCursorPos(&pt);
+    HMONITOR hMon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO mi = { sizeof(mi) };
+    GetMonitorInfoW(hMon, &mi);
+
+    int w = 156;
+    int h = 30;
+    int x = mi.rcMonitor.right - w - 24;
+    int y = mi.rcMonitor.top + 18;
+
+    g_hWndHUD = CreateWindowExW(
+        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+        L"SnippingToolHighFPS_HUD",
+        L"HighFPS_HUD",
+        WS_POPUP | WS_VISIBLE,
+        x, y, w, h,
+        NULL, NULL, g_hMod, NULL
+    );
+
+    if (g_hWndHUD) {
+        // The magic: EXCLUDE completely from all video recording/captures!
+        SetWindowDisplayAffinity(g_hWndHUD, WDA_EXCLUDEFROMCAPTURE);
+        ShowWindow(g_hWndHUD, SW_SHOWNOACTIVATE);
+        UpdateWindow(g_hWndHUD);
+    }
+
+    MSG msg;
+    while (g_bHudRunning && GetMessageW(&msg, NULL, 0, 0)) {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+
+    if (g_hWndHUD) {
+        DestroyWindow(g_hWndHUD);
+        g_hWndHUD = NULL;
+    }
+    UnregisterClassW(L"SnippingToolHighFPS_HUD", g_hMod);
+    return 0;
+}
+
+static void ShowRecordingHUD(UINT32 targetFps) {
+    if (!g_EnableRecordingHUD) return;
+    if (g_bHudRunning) return; // already active
+
+    g_HudFPS = targetFps;
+    g_HudElapsedSec = 0;
+    g_bHudRunning = TRUE;
+    g_hHudThread = CreateThread(NULL, 0, HudThreadProc, NULL, 0, NULL);
+}
+
+static void HideRecordingHUD() {
+    if (!g_bHudRunning) return;
+    g_bHudRunning = FALSE;
+    if (g_hWndHUD) {
+        PostMessageW(g_hWndHUD, WM_CLOSE, 0, 0);
+    }
+    if (g_hHudThread) {
+        WaitForSingleObject(g_hHudThread, 1000);
+        CloseHandle(g_hHudThread);
+        g_hHudThread = NULL;
+    }
+}
+
 // Load INI configuration dynamically
 static void LoadConfig(HMODULE hMod) {
     if (hMod) g_hMod = hMod;
@@ -87,10 +281,18 @@ static void LoadConfig(HMODULE hMod) {
         swprintf(g_LogPath, MAX_PATH, L"%sSnippingToolHighFPS.log", tempPath);
     }
 
+    g_PerMonitorAutoMatch = GetPrivateProfileIntW(L"Settings", L"PerMonitorAutoMatch", 1, iniPath);
+    g_EnableRecordingHUD  = GetPrivateProfileIntW(L"Settings", L"EnableRecordingHUD", 1, iniPath);
+
     int configuredFps = GetPrivateProfileIntW(L"Settings", L"TargetFPS", 0, iniPath);
     if (configuredFps <= 0) {
-        g_TargetFPS = DetectPrimaryRefreshRate();
-        Log("[SnippingToolHighFPS] TargetFPS set to Auto (detected display refresh: %u Hz)", g_TargetFPS);
+        if (g_PerMonitorAutoMatch) {
+            g_TargetFPS = DetectActiveMonitorRefreshRate();
+            Log("[SnippingToolHighFPS] Per-Monitor Auto Match: TargetFPS set to %u Hz (active monitor)", g_TargetFPS);
+        } else {
+            g_TargetFPS = DetectPrimaryRefreshRate();
+            Log("[SnippingToolHighFPS] Global Auto Match: TargetFPS set to %u Hz (highest display)", g_TargetFPS);
+        }
     } else {
         g_TargetFPS = (UINT32)configuredFps;
         Log("[SnippingToolHighFPS] TargetFPS loaded from INI: %u FPS", g_TargetFPS);
@@ -147,6 +349,9 @@ extern "C" __declspec(dllexport) HRESULT StartCaptureHook(void* pWrapper) {
     LoadConfig(g_hMod);
 
     Log("[SnippingToolHighFPS] StartCaptureHook triggered on session 0x%p (Target: %u FPS)", pSession, g_TargetFPS);
+
+    // Show Invisible In-Recording HUD (excluded from capture via WDA_EXCLUDEFROMCAPTURE)
+    ShowRecordingHUD(g_TargetFPS);
 
     // 1. Unlock compositor to TargetFPS
     UnlockCaptureSession(pSession);
@@ -398,6 +603,8 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
         DisableThreadLibraryCalls(hinstDLL);
         LoadConfig(hinstDLL);
         ApplySnippingToolPatches();
+    } else if (fdwReason == DLL_PROCESS_DETACH) {
+        HideRecordingHUD();
     }
     return TRUE;
 }
