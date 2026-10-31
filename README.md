@@ -6,13 +6,14 @@
 
 <p align="center">
   <strong>Native 60, 120, 144, and 240 FPS Screen Recording for Windows Snipping Tool</strong><br />
-  <sub>Code created with AI</sub>
+  <sub>✨ Designed, reverse-engineered, and built with AI</sub>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Platform-Windows%2011%20(24H2%20Ready)-0078D4?style=for-the-badge&logo=windows11&logoColor=white" alt="Windows 11" />
   <img src="https://img.shields.io/badge/Recording-60%20%7C%20120%20%7C%20144%20%7C%20240%20FPS-38BDF8?style=for-the-badge&logo=speedtest&logoColor=white" alt="High FPS" />
   <img src="https://img.shields.io/badge/Startup_Impact-Low%20(%3C15MB%20RAM)-10B981?style=for-the-badge" alt="Low Startup Impact" />
+  <img src="https://img.shields.io/badge/Built%20with-AI-7C3AED?style=for-the-badge" alt="Built with AI" />
   <img src="https://img.shields.io/badge/Updates-Survives%20Store%20Updates-059669?style=for-the-badge&logo=microsoftstore&logoColor=white" alt="Update Proof" />
   <img src="https://img.shields.io/badge/License-MIT-gray?style=for-the-badge" alt="MIT License" />
 </p>
