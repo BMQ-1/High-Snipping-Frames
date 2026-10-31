@@ -812,19 +812,21 @@ static void RenderUI(Graphics& g, int clientWidth, int clientHeight) {
     Pen penHLine(Color(0x33, 0x33, 0x33), 1.0f);
     g.DrawLine(&penHLine, 0.0f, 56.0f, (float)BASE_WIDTH, 56.0f);
 
-    // Header Logo Reticle (Miniature Optical Crop)
-    RectF rcLogo(18.0f, 13.0f, 30.0f, 30.0f);
-    SolidBrush brLogoBg(Color(0x35, 0x35, 0x35));
-    FillRoundedRect(g, brLogoBg, rcLogo, 6.0f);
-    DrawRoundedRect(g, penBorder, rcLogo, 6.0f);
-
-    Pen penBr(Color(0xFF, 0xFF, 0xFF), 1.8f);
-    PointF ptL1[] = { { 24.0f, 26.0f }, { 24.0f, 19.0f }, { 31.0f, 19.0f } };
-    g.DrawLines(&penBr, ptL1, 3);
-    Pen penBrA(Color(0x00, 0x78, 0xD4), 1.8f);
-    PointF ptL2[] = { { 42.0f, 30.0f }, { 42.0f, 37.0f }, { 35.0f, 37.0f } };
-    g.DrawLines(&penBrA, ptL2, 3);
-    g.FillEllipse(&brAccentLight, 36.0f, 20.0f, 4.0f, 4.0f);
+    // Header Logo App Icon
+    HICON hHeaderIcon = (HICON)LoadImageW(g_hInstance, MAKEINTRESOURCEW(1), IMAGE_ICON, 32, 32, LR_DEFAULTCOLOR);
+    if (hHeaderIcon) {
+        Bitmap* pBmpIcon = Bitmap::FromHICON(hHeaderIcon);
+        if (pBmpIcon) {
+            g.DrawImage(pBmpIcon, 16.0f, 12.0f, 32.0f, 32.0f);
+            delete pBmpIcon;
+        }
+        DestroyIcon(hHeaderIcon);
+    } else {
+        RectF rcLogo(18.0f, 13.0f, 30.0f, 30.0f);
+        SolidBrush brLogoBg(Color(0x35, 0x35, 0x35));
+        FillRoundedRect(g, brLogoBg, rcLogo, 6.0f);
+        DrawRoundedRect(g, penBorder, rcLogo, 6.0f);
+    }
 
     g.DrawString(L"High Snipping Frames", -1, &fontTitle, PointF(56.0f, 18.0f), &brTextWhite);
 

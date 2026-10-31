@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/icon.svg" width="130" height="130" alt="High Snipping Frames Logo" />
+  <img src="assets/motion-frame.png" width="130" height="130" alt="High Snipping Frames Logo" />
 </p>
 
 <h1 align="center">High Snipping Frames</h1>
