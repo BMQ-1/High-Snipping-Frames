@@ -90,22 +90,12 @@ static BOOL InjectDLLByPID(DWORD pid, const WCHAR* dllPath) {
     VirtualFreeEx(hProcess, pRemoteBuf, 0, MEM_RELEASE);
     CloseHandle(hProcess);
 
-    FILE* fp2 = _wfopen(L"C:\\AntiGravity\\PC Tool\\Snipping Tool high FPS\\loader.log", L"a");
-    if (fp2) {
-        fwprintf(fp2, L"InjectDLLByPID: pid=%lu, dllPath=%s, exitCode=0x%08lX\n", pid, dllPath, exitCode);
-        fclose(fp2);
-    }
 
     // exitCode is the HMODULE (non-zero on success)
     return (exitCode != 0 && exitCode != 0xC0000409);
 }
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow) {
-    FILE* fp = _wfopen(L"C:\\AntiGravity\\PC Tool\\Snipping Tool high FPS\\loader.log", L"a");
-    if (fp) {
-        fwprintf(fp, L"LOADER CMD: %s\n", GetCommandLineW());
-        fclose(fp);
-    }
 
     WCHAR selfDir[MAX_PATH];
     GetModuleFileNameW(NULL, selfDir, MAX_PATH);
@@ -115,7 +105,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     WCHAR dllPath[MAX_PATH];
     swprintf(dllPath, MAX_PATH, L"%s\\SnippingToolHighFPS.dll", selfDir);
     if (GetFileAttributesW(dllPath) == INVALID_FILE_ATTRIBUTES) {
-        wcscpy(dllPath, L"C:\\AntiGravity\\PC Tool\\Snipping Tool high FPS\\High-Snipping-Frames\\bin\\SnippingToolHighFPS.dll");
+        wcscpy(dllPath, L"C:\\Program Files\\SnippingToolHighFPS\\SnippingToolHighFPS.dll");
     }
 
     int argc = 0;

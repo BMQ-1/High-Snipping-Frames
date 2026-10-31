@@ -115,9 +115,6 @@ static void LocateIniPath() {
     if (GetFileAttributesW(g_IniPath) == INVALID_FILE_ATTRIBUTES) {
         wcscpy(g_IniPath, L"C:\\Program Files\\SnippingToolHighFPS\\SnippingToolHighFPS.ini");
     }
-    if (GetFileAttributesW(g_IniPath) == INVALID_FILE_ATTRIBUTES) {
-        wcscpy(g_IniPath, L"C:\\AntiGravity\\PC Tool\\Snipping Tool high FPS\\High-Snipping-Frames\\bin\\SnippingToolHighFPS.ini");
-    }
 }
 
 // Helper: Detect highest active refresh rate
@@ -178,8 +175,10 @@ static void SetAutoStart(BOOL enable) {
     HKEY hKey;
     if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
         if (enable) {
-            WCHAR guiPath[MAX_PATH];
-            swprintf(guiPath, MAX_PATH, L"\"C:\\Program Files\\SnippingToolHighFPS\\HighSnippingFramesGUI.exe\" --minimized");
+            WCHAR selfExe[MAX_PATH];
+            GetModuleFileNameW(NULL, selfExe, MAX_PATH);
+            WCHAR guiPath[MAX_PATH + 32];
+            swprintf(guiPath, MAX_PATH + 32, L"\"%s\" --minimized", selfExe);
             RegSetValueExW(hKey, L"HighSnippingFrames", 0, REG_SZ, (const BYTE*)guiPath, (DWORD)(wcslen(guiPath) + 1) * sizeof(WCHAR));
         } else {
             RegDeleteValueW(hKey, L"HighSnippingFrames");
@@ -206,9 +205,6 @@ static void LocateDllPath(WCHAR* outPath) {
     swprintf(outPath, MAX_PATH, L"%s\\SnippingToolHighFPS.dll", selfDir);
     if (GetFileAttributesW(outPath) == INVALID_FILE_ATTRIBUTES) {
         wcscpy(outPath, L"C:\\Program Files\\SnippingToolHighFPS\\SnippingToolHighFPS.dll");
-    }
-    if (GetFileAttributesW(outPath) == INVALID_FILE_ATTRIBUTES) {
-        wcscpy(outPath, L"C:\\AntiGravity\\PC Tool\\Snipping Tool high FPS\\High-Snipping-Frames\\bin\\SnippingToolHighFPS.dll");
     }
 }
 
