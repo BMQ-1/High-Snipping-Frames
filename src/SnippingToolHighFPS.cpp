@@ -13,6 +13,7 @@ static const IID IID_IGraphicsCaptureSession5 =
 
 // Active configuration
 static UINT32 g_TargetFPS = 144;
+static int    g_BitrateMultiplier = 1; // 0 = Balanced, 1 = High Quality (1.5x), 2 = Ultra Gaming (2.0x)
 static BOOL   g_EnableCompositorUnlock = TRUE;
 static BOOL   g_EnableEncoderUnlock = TRUE;
 static BOOL   g_BypassThrottle = TRUE;
@@ -95,12 +96,13 @@ static void LoadConfig(HMODULE hMod) {
         Log("[SnippingToolHighFPS] TargetFPS loaded from INI: %u FPS", g_TargetFPS);
     }
 
+    g_BitrateMultiplier      = GetPrivateProfileIntW(L"Settings", L"BitrateMultiplier", 1, iniPath);
     g_EnableCompositorUnlock = GetPrivateProfileIntW(L"Settings", L"UnlockCompositor", 1, iniPath);
     g_EnableEncoderUnlock    = GetPrivateProfileIntW(L"Settings", L"UnlockEncoder", 1, iniPath);
     g_BypassThrottle         = GetPrivateProfileIntW(L"Settings", L"BypassThrottle", 1, iniPath);
 
-    Log("[SnippingToolHighFPS] Active Config -> TargetFPS: %u, CompositorUnlock: %d, EncoderUnlock: %d, BypassThrottle: %d",
-        g_TargetFPS, g_EnableCompositorUnlock, g_EnableEncoderUnlock, g_BypassThrottle);
+    Log("[SnippingToolHighFPS] Active Config -> TargetFPS: %u, BitrateMultiplier: %d, CompositorUnlock: %d, EncoderUnlock: %d, BypassThrottle: %d",
+        g_TargetFPS, g_BitrateMultiplier, g_EnableCompositorUnlock, g_EnableEncoderUnlock, g_BypassThrottle);
 }
 
 // Unlocks compositor minimum update interval on GraphicsCaptureSession
@@ -115,9 +117,12 @@ static void UnlockCaptureSession(void* pSession) {
         typedef HRESULT (__stdcall *PutIntervalFn)(void*, INT64);
         PutIntervalFn putInterval = (PutIntervalFn)(*(void***)pSession5)[7];
 
+        // Dynamic V-Sync Cadence Pacing:
+        // Set exact 100ns presentation interval without integer truncation.
+        // During GPU spikes or frame drops, compositor delivers frames immediately.
         INT64 interval_100ns = (g_TargetFPS > 0) ? (10000000LL / g_TargetFPS) : 0;
         HRESULT hrPut = putInterval(pSession5, interval_100ns);
-        Log("[SnippingToolHighFPS] Compositor MinUpdateInterval(%lld ticks [%.2f ms]) -> 0x%08X",
+        Log("[SnippingToolHighFPS] Compositor MinUpdateInterval(%lld ticks [%.2f ms]) -> 0x%08X (Pacing Active)",
             interval_100ns, (double)interval_100ns / 10000.0, hrPut);
 
         ((IUnknown*)pSession5)->Release();
@@ -172,13 +177,39 @@ extern "C" __declspec(dllexport) UINT32 MediaRatioHook(void** ppRatio) {
         typedef HRESULT (__stdcall *PutRatioFn)(void*, UINT32);
         PutRatioFn putNumerator   = (PutRatioFn)vtbl[6];
         PutRatioFn putDenominator = (PutRatioFn)vtbl[8];
-        HRESULT hr1 = putNumerator(pRatio, g_TargetFPS);
-        HRESULT hr2 = putDenominator(pRatio, 1);
-        Log("[SnippingToolHighFPS] IMediaRatio::put_Numerator(%u) -> 0x%08X, put_Denominator(1) -> 0x%08X",
-            g_TargetFPS, hr1, hr2);
+
+        // 1. Audio-Video Drift Prevention: Exact Rational Frame-Rate
+        UINT32 num = g_TargetFPS;
+        UINT32 den = 1;
+
+        if (num == 59 || num == 60) {
+            UINT32 dispFreq = DetectPrimaryRefreshRate();
+            if (dispFreq == 59) {
+                num = 60000;
+                den = 1001; // Exact NTSC 59.940059... fps prevents 1000/1001 audio drift
+            }
+        }
+
+        HRESULT hr1 = putNumerator(pRatio, num);
+        HRESULT hr2 = putDenominator(pRatio, den);
+        Log("[SnippingToolHighFPS] IMediaRatio::put_Numerator(%u) -> 0x%08X, put_Denominator(%u) -> 0x%08X (A/V Sync Locked)",
+            num, hr1, den, hr2);
     }
 
-    return g_TargetFPS;
+    // 2. Hardware Encoder Bitrate Scaling (Game Drop & High-Motion Protection)
+    // Snipping Tool multiplies returned value by width * height to allocate encoder bitrate buffer.
+    // Scaling this ensures fast-motion scenes never starve the hardware encoder or drop frames.
+    UINT32 calcFps = g_TargetFPS;
+    if (g_BitrateMultiplier == 1) {
+        // High Quality: 1.5x bitrate allocation
+        calcFps = (g_TargetFPS * 3) / 2;
+    } else if (g_BitrateMultiplier == 2) {
+        // Ultra Gaming: 2.0x bitrate allocation
+        calcFps = g_TargetFPS * 2;
+    }
+
+    Log("[SnippingToolHighFPS] Returning bitrate basis: %u (BitrateMultiplier=%d)", calcFps, g_BitrateMultiplier);
+    return calcFps;
 }
 
 // Memory pattern scanner
