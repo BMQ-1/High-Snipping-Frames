@@ -837,37 +837,69 @@ static int HitTest(int mouseX, int mouseY, int* pData) {
     return HIT_NONE;
 }
 
-// Show Tray Context Menu
+static void UpdateTrayTooltip() {
+    if (g_CurrentFPS == 0) {
+        swprintf(g_nid.szTip, 128, L"High Snipping Frames - Auto (%u Hz)", GetMaxDisplayRefresh());
+    } else {
+        swprintf(g_nid.szTip, 128, L"High Snipping Frames - %u FPS", g_CurrentFPS);
+    }
+    Shell_NotifyIconW(NIM_MODIFY, &g_nid);
+}
+
+// Show Tray Context Menu - Modern, structured, and easy to read
 static void ShowTrayMenu(HWND hWnd) {
     POINT pt;
     GetCursorPos(&pt);
     HMENU hMenu = CreatePopupMenu();
 
-    AppendMenuW(hMenu, MF_STRING, IDM_OPEN, L"High Snipping Frames");
+    // 1. App Header with live status
+    UINT32 maxRefresh = GetMaxDisplayRefresh();
+    WCHAR headerStr[128];
+    if (g_CurrentFPS == 0) {
+        swprintf(headerStr, 128, L"⚡ High Snipping Frames  •  Auto (%u Hz)", maxRefresh);
+    } else {
+        swprintf(headerStr, 128, L"⚡ High Snipping Frames  •  %u FPS", g_CurrentFPS);
+    }
+    AppendMenuW(hMenu, MF_STRING | MF_DISABLED, 0, headerStr);
+    AppendMenuW(hMenu, MF_STRING, IDM_OPEN, L"⚙  Open Control Center");
     SetMenuDefaultItem(hMenu, IDM_OPEN, FALSE);
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
 
-    // FPS Submenu
+    // 2. Framerate Selection Submenu (with active target previewed right in label)
     HMENU hFpsMenu = CreatePopupMenu();
-    UINT autoCheck = (g_CurrentFPS == 0) ? MF_CHECKED : MF_UNCHECKED;
-    AppendMenuW(hFpsMenu, MF_STRING | autoCheck, IDM_FPS_AUTO, L"Auto (Match Display)");
-    AppendMenuW(hFpsMenu, MF_STRING | ((g_CurrentFPS == 60) ? MF_CHECKED : MF_UNCHECKED), IDM_FPS_60, L"60 FPS");
-    AppendMenuW(hFpsMenu, MF_STRING | ((g_CurrentFPS == 90) ? MF_CHECKED : MF_UNCHECKED), IDM_FPS_90, L"90 FPS");
-    AppendMenuW(hFpsMenu, MF_STRING | ((g_CurrentFPS == 120) ? MF_CHECKED : MF_UNCHECKED), IDM_FPS_120, L"120 FPS");
-    AppendMenuW(hFpsMenu, MF_STRING | ((g_CurrentFPS == 144) ? MF_CHECKED : MF_UNCHECKED), IDM_FPS_144, L"144 FPS");
-    AppendMenuW(hFpsMenu, MF_STRING | ((g_CurrentFPS == 165) ? MF_CHECKED : MF_UNCHECKED), IDM_FPS_165, L"165 FPS");
-    AppendMenuW(hFpsMenu, MF_STRING | ((g_CurrentFPS == 240) ? MF_CHECKED : MF_UNCHECKED), IDM_FPS_240, L"240 FPS");
-    AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hFpsMenu, L"Target Framerate");
+    
+    WCHAR autoLabel[64];
+    swprintf(autoLabel, 64, L"Auto (Match Monitor - %u Hz)", maxRefresh);
+    AppendMenuW(hFpsMenu, MF_STRING | ((g_CurrentFPS == 0)   ? MF_CHECKED : MF_UNCHECKED), IDM_FPS_AUTO, autoLabel);
+    AppendMenuW(hFpsMenu, MF_STRING | ((g_CurrentFPS == 60)  ? MF_CHECKED : MF_UNCHECKED), IDM_FPS_60,   L"60 FPS  (Balanced)");
+    AppendMenuW(hFpsMenu, MF_STRING | ((g_CurrentFPS == 90)  ? MF_CHECKED : MF_UNCHECKED), IDM_FPS_90,   L"90 FPS");
+    AppendMenuW(hFpsMenu, MF_STRING | ((g_CurrentFPS == 120) ? MF_CHECKED : MF_UNCHECKED), IDM_FPS_120,  L"120 FPS (High Motion)");
+    AppendMenuW(hFpsMenu, MF_STRING | ((g_CurrentFPS == 144) ? MF_CHECKED : MF_UNCHECKED), IDM_FPS_144,  L"144 FPS (Ultra Smooth)");
+    AppendMenuW(hFpsMenu, MF_STRING | ((g_CurrentFPS == 165) ? MF_CHECKED : MF_UNCHECKED), IDM_FPS_165,  L"165 FPS");
+    AppendMenuW(hFpsMenu, MF_STRING | ((g_CurrentFPS == 240) ? MF_CHECKED : MF_UNCHECKED), IDM_FPS_240,  L"240 FPS (Esports)");
 
+    WCHAR curFpsStr[64];
+    if (g_CurrentFPS == 0) {
+        swprintf(curFpsStr, 64, L"🎯 Target Framerate: Auto (%u Hz)", maxRefresh);
+    } else {
+        swprintf(curFpsStr, 64, L"🎯 Target Framerate: %u FPS", g_CurrentFPS);
+    }
+    AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hFpsMenu, curFpsStr);
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(hMenu, MF_STRING, IDM_RECORD, L"Record Screen (Snipping Tool)");
-    AppendMenuW(hMenu, MF_STRING, IDM_FOLDER, L"Open Recordings Folder");
-    AppendMenuW(hMenu, MF_STRING, IDM_ANALYZE, L"Verify Latest Video");
+
+    // 3. Quick Actions
+    AppendMenuW(hMenu, MF_STRING, IDM_RECORD,  L"📹 Start Screen Recording");
+    AppendMenuW(hMenu, MF_STRING, IDM_FOLDER,  L"📂 Open Recordings Folder");
+    AppendMenuW(hMenu, MF_STRING, IDM_ANALYZE, L"🔬 Verify Latest Video (ffprobe)");
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(hMenu, MF_STRING, IDM_RESET_ZOOM, L"Reset Zoom to 100%");
-    AppendMenuW(hMenu, MF_STRING, IDM_RESTART_SVC, L"Rescan Snipping Tool");
+
+    // 4. Utility / System
+    AppendMenuW(hMenu, MF_STRING, IDM_RESET_ZOOM,  L"🔍 Reset UI Zoom (100%)");
+    AppendMenuW(hMenu, MF_STRING, IDM_RESTART_SVC, L"🔄 Rescan Snipping Tool");
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(hMenu, MF_STRING, IDM_EXIT, L"Exit");
+
+    // 5. Exit
+    AppendMenuW(hMenu, MF_STRING, IDM_EXIT, L"❌ Exit");
 
     SetForegroundWindow(hWnd);
     TrackPopupMenu(hMenu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hWnd, NULL);
@@ -965,6 +997,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
                 // Instantly update target FPS and persist
                 g_CurrentFPS = g_FpsOptions[data];
                 SaveSettings();
+                UpdateTrayTooltip();
                 InvalidateRect(hWnd, NULL, FALSE);
             } else if (hit == HIT_QUALITY_PRESET && data >= 0 && data < g_NumQualityOptions) {
                 g_QualityLevel = data;
@@ -1038,13 +1071,13 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
                 case IDM_FOLDER: OpenRecordingsFolder(); break;
                 case IDM_ANALYZE: AnalyzeLatestRecording(hWnd); break;
 
-                case IDM_FPS_AUTO: g_CurrentFPS = 0;   SaveSettings(); InvalidateRect(hWnd, NULL, FALSE); break;
-                case IDM_FPS_60:   g_CurrentFPS = 60;  SaveSettings(); InvalidateRect(hWnd, NULL, FALSE); break;
-                case IDM_FPS_90:   g_CurrentFPS = 90;  SaveSettings(); InvalidateRect(hWnd, NULL, FALSE); break;
-                case IDM_FPS_120:  g_CurrentFPS = 120; SaveSettings(); InvalidateRect(hWnd, NULL, FALSE); break;
-                case IDM_FPS_144:  g_CurrentFPS = 144; SaveSettings(); InvalidateRect(hWnd, NULL, FALSE); break;
-                case IDM_FPS_165:  g_CurrentFPS = 165; SaveSettings(); InvalidateRect(hWnd, NULL, FALSE); break;
-                case IDM_FPS_240:  g_CurrentFPS = 240; SaveSettings(); InvalidateRect(hWnd, NULL, FALSE); break;
+                case IDM_FPS_AUTO: g_CurrentFPS = 0;   SaveSettings(); UpdateTrayTooltip(); InvalidateRect(hWnd, NULL, FALSE); break;
+                case IDM_FPS_60:   g_CurrentFPS = 60;  SaveSettings(); UpdateTrayTooltip(); InvalidateRect(hWnd, NULL, FALSE); break;
+                case IDM_FPS_90:   g_CurrentFPS = 90;  SaveSettings(); UpdateTrayTooltip(); InvalidateRect(hWnd, NULL, FALSE); break;
+                case IDM_FPS_120:  g_CurrentFPS = 120; SaveSettings(); UpdateTrayTooltip(); InvalidateRect(hWnd, NULL, FALSE); break;
+                case IDM_FPS_144:  g_CurrentFPS = 144; SaveSettings(); UpdateTrayTooltip(); InvalidateRect(hWnd, NULL, FALSE); break;
+                case IDM_FPS_165:  g_CurrentFPS = 165; SaveSettings(); UpdateTrayTooltip(); InvalidateRect(hWnd, NULL, FALSE); break;
+                case IDM_FPS_240:  g_CurrentFPS = 240; SaveSettings(); UpdateTrayTooltip(); InvalidateRect(hWnd, NULL, FALSE); break;
 
                 case IDM_RESET_ZOOM:
                     g_ZoomFactor = 1.0f;
