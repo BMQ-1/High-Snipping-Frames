@@ -103,7 +103,7 @@ flowchart TD
 
 1. Clone or download this repository:
    ```cmd
-   git clone https://github.com/<your-username>/High-Snipping-Frames.git
+   git clone https://github.com/BMQ-1/High-Snipping-Frames.git
    cd High-Snipping-Frames
    ```
 2. Double-click **`install.bat`** (or run it as Administrator).

@@ -63,7 +63,7 @@ TO UNINSTALL:
   Snipping Tool back to stock settings.
 
 GitHub Repository:
-https://github.com/your-username/High-Snipping-Frames
+https://github.com/BMQ-1/High-Snipping-Frames
 ===============================================================
 "@
 Set-Content -Path (Join-Path $tempStageDir "QUICK_START.txt") -Value $txtReadme -Encoding UTF8
