@@ -6,5 +6,6 @@
 
 # Temporary files
 *.tmp
+dist/
 .vscode/
 .idea/
