@@ -3,6 +3,7 @@
 
 #include <windows.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <dwmapi.h>
 #include <gdiplus.h>
 #include <tlhelp32.h>
@@ -33,7 +34,13 @@ using namespace Gdiplus;
 #define IDM_ANALYZE       3022
 #define IDM_RESTART_SVC   3023
 #define IDM_RESET_ZOOM    3024
+#define IDM_STORAGE_CHECK 3026
 #define IDM_EXIT          3025
+
+// Internal Timers
+#define TIMER_SLEEP_RECOVERY    4001
+#define TIMER_STORAGE_GUARDIAN  4002
+#define TIMER_STORAGE_STARTUP   4003
 
 #ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
@@ -58,6 +65,13 @@ static int    g_QualityLevel = 1; // 0=Balanced, 1=High, 2=Ultra
 static float  g_ZoomFactor = 1.0f; // Zoom: 0.8f - 2.0f
 static BOOL   g_AutoStart = TRUE;
 static DWORD  g_LastSavedTick = 0; // For temporary "✓ Saved" toast animation
+
+// Storage Guardian Configuration
+static BOOL  g_EnableStorageGuardian   = TRUE;
+static DWORD g_MaxFolderSizeGB         = 15;        // Alert if folder exceeds size in GB (0 = disabled)
+static DWORD g_TransferDays            = 0;         // Transfer recordings older than X days to Folder X (0 = disabled)
+static WCHAR g_TransferFolder[MAX_PATH] = { 0 };    // Destination Folder X
+static DWORD g_AutoCleanDays           = 0;         // Auto-delete recordings older than X days (0 = disabled)
 
 // Hit test IDs (in base logical coordinates)
 #define HIT_NONE           0
@@ -335,6 +349,13 @@ static void LoadSettings() {
         g_ZoomFactor = (float)zoomPercent / 100.0f;
     }
     g_AutoStart = IsAutoStartEnabled();
+
+    // Storage Guardian Settings
+    g_EnableStorageGuardian = GetPrivateProfileIntW(L"StorageGuardian", L"EnableStorageGuardian", 1, g_IniPath);
+    g_MaxFolderSizeGB       = GetPrivateProfileIntW(L"StorageGuardian", L"MaxFolderSizeGB", 15, g_IniPath);
+    g_TransferDays          = GetPrivateProfileIntW(L"StorageGuardian", L"TransferDays", 0, g_IniPath);
+    GetPrivateProfileStringW(L"StorageGuardian", L"TransferFolder", L"", g_TransferFolder, MAX_PATH, g_IniPath);
+    g_AutoCleanDays         = GetPrivateProfileIntW(L"StorageGuardian", L"AutoCleanDays", 0, g_IniPath);
 }
 
 // Helper: Write Settings to INI
@@ -379,6 +400,138 @@ static void ApplyZoomWindowSize(HWND hWnd) {
     SetWindowPos(hWnd, NULL, 0, 0, newWidth + borderW, newHeight + borderH,
                  SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
     InvalidateRect(hWnd, NULL, TRUE);
+}
+
+// Storage Guardian Engine: Monitors disk usage, warns on high capacity,
+// and automatically transfers or cleans recordings based on age.
+static void RunStorageGuardian(HWND hWnd, BOOL manualTrigger) {
+    if (!g_EnableStorageGuardian && !manualTrigger) return;
+
+    WCHAR userProfile[MAX_PATH];
+    if (!GetEnvironmentVariableW(L"USERPROFILE", userProfile, MAX_PATH)) return;
+
+    WCHAR recDir[MAX_PATH];
+    swprintf(recDir, MAX_PATH, L"%s\\Videos\\Screen Recordings", userProfile);
+    if (GetFileAttributesW(recDir) == INVALID_FILE_ATTRIBUTES) return;
+
+    WCHAR searchPath[MAX_PATH];
+    swprintf(searchPath, MAX_PATH, L"%s\\*.mp4", recDir);
+
+    WIN32_FIND_DATAW wfd;
+    HANDLE hFind = FindFirstFileW(searchPath, &wfd);
+    if (hFind == INVALID_HANDLE_VALUE) {
+        if (manualTrigger) {
+            MessageBoxW(hWnd, L"Screen Recordings folder is currently empty.\nNo cleanup or transfer required.",
+                        L"Storage Guardian", MB_ICONINFORMATION);
+        }
+        return;
+    }
+
+    FILETIME nowFt;
+    GetSystemTimeAsFileTime(&nowFt);
+    ULARGE_INTEGER uNow;
+    uNow.LowPart = nowFt.dwLowDateTime;
+    uNow.HighPart = nowFt.dwHighDateTime;
+
+    ULONGLONG totalBytes = 0;
+    DWORD totalCount = 0;
+    DWORD transferredCount = 0;
+    DWORD cleanedCount = 0;
+
+    // Check if target transfer folder is configured and create if needed
+    BOOL canTransfer = (g_TransferDays > 0 && g_TransferFolder[0] != L'\0');
+    if (canTransfer) {
+        if (GetFileAttributesW(g_TransferFolder) == INVALID_FILE_ATTRIBUTES) {
+            SHCreateDirectoryExW(NULL, g_TransferFolder, NULL);
+        }
+    }
+
+    do {
+        if (wfd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+
+        ULARGE_INTEGER uSize;
+        uSize.LowPart = wfd.nFileSizeLow;
+        uSize.HighPart = wfd.nFileSizeHigh;
+        totalBytes += uSize.QuadPart;
+        totalCount++;
+
+        ULARGE_INTEGER uFile;
+        uFile.LowPart = wfd.ftLastWriteTime.dwLowDateTime;
+        uFile.HighPart = wfd.ftLastWriteTime.dwHighDateTime;
+
+        ULONGLONG diff100ns = (uNow.QuadPart > uFile.QuadPart) ? (uNow.QuadPart - uFile.QuadPart) : 0;
+        DWORD ageDays = (DWORD)(diff100ns / (10000000ULL * 3600 * 24));
+
+        WCHAR srcFile[MAX_PATH];
+        swprintf(srcFile, MAX_PATH, L"%s\\%s", recDir, wfd.cFileName);
+
+        // 1. Transfer to Folder X if age >= TransferDays
+        if (canTransfer && ageDays >= g_TransferDays) {
+            WCHAR dstFile[MAX_PATH];
+            swprintf(dstFile, MAX_PATH, L"%s\\%s", g_TransferFolder, wfd.cFileName);
+            if (MoveFileExW(srcFile, dstFile, MOVEFILE_COPY_ALLOWED | MOVEFILE_REPLACE_EXISTING)) {
+                transferredCount++;
+                totalBytes -= uSize.QuadPart;
+                continue; // moved successfully, skip delete
+            }
+        }
+
+        // 2. Auto-clean / delete if age >= AutoCleanDays
+        if (g_AutoCleanDays > 0 && ageDays >= g_AutoCleanDays) {
+            if (DeleteFileW(srcFile)) {
+                cleanedCount++;
+                totalBytes -= uSize.QuadPart;
+            }
+        }
+    } while (FindNextFileW(hFind, &wfd));
+    FindClose(hFind);
+
+    double totalGB = (double)totalBytes / (1024.0 * 1024.0 * 1024.0);
+
+    // If MaxFolderSizeGB is exceeded, show non-intrusive warning
+    if (g_MaxFolderSizeGB > 0 && totalGB >= (double)g_MaxFolderSizeGB) {
+        WCHAR warnMsg[256];
+        swprintf(warnMsg, 256, L"Screen Recordings folder is currently %.1f GB (exceeds your %u GB limit).", totalGB, g_MaxFolderSizeGB);
+        
+        ZeroMemory(&g_nid, sizeof(g_nid));
+        g_nid.cbSize = sizeof(g_nid);
+        g_nid.hWnd = hWnd;
+        g_nid.uID = ID_TRAY_APP_ICON;
+        g_nid.uFlags = NIF_INFO;
+        swprintf(g_nid.szInfoTitle, 64, L"High Snipping Frames - Storage Warning");
+        wcscpy(g_nid.szInfo, warnMsg);
+        g_nid.dwInfoFlags = NIIF_WARNING;
+        Shell_NotifyIconW(NIM_MODIFY, &g_nid);
+    } else if (transferredCount > 0 || cleanedCount > 0) {
+        WCHAR summaryMsg[256];
+        swprintf(summaryMsg, 256, L"Transferred %u recording(s) and cleaned %u old file(s).", transferredCount, cleanedCount);
+        
+        ZeroMemory(&g_nid, sizeof(g_nid));
+        g_nid.cbSize = sizeof(g_nid);
+        g_nid.hWnd = hWnd;
+        g_nid.uID = ID_TRAY_APP_ICON;
+        g_nid.uFlags = NIF_INFO;
+        swprintf(g_nid.szInfoTitle, 64, L"High Snipping Frames - Storage Guardian");
+        wcscpy(g_nid.szInfo, summaryMsg);
+        g_nid.dwInfoFlags = NIIF_INFO;
+        Shell_NotifyIconW(NIM_MODIFY, &g_nid);
+    }
+
+    if (manualTrigger) {
+        WCHAR diagMsg[512];
+        swprintf(diagMsg, 512,
+                 L"Storage Guardian Status Report:\n\n"
+                 L"• Current Folder Size: %.2f GB (%u videos)\n"
+                 L"• Size Threshold: %u GB %s\n"
+                 L"• Transferred to Archive: %u video(s)%s\n"
+                 L"• Cleaned: %u video(s)%s\n\n"
+                 L"Custom transfer and cleanup rules can be set in SnippingToolHighFPS.ini",
+                 totalGB, totalCount,
+                 g_MaxFolderSizeGB, (totalGB >= g_MaxFolderSizeGB && g_MaxFolderSizeGB > 0) ? L"[EXCEEDED]" : L"[OK]",
+                 transferredCount, (canTransfer ? L"" : L" (Disabled)"),
+                 cleanedCount, (g_AutoCleanDays > 0 ? L"" : L" (Disabled)"));
+        MessageBoxW(hWnd, diagMsg, L"High Snipping Frames - Storage Guardian", MB_ICONINFORMATION);
+    }
 }
 
 // Open Snipping Tool Recordings folder in Explorer
@@ -921,8 +1074,9 @@ static void ShowTrayMenu(HWND hWnd) {
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
 
     // 4. Utility / System
-    AppendMenuW(hMenu, MF_STRING, IDM_RESET_ZOOM,  L"Reset Zoom (100%)");
-    AppendMenuW(hMenu, MF_STRING, IDM_RESTART_SVC, L"Rescan Snipping Tool");
+    AppendMenuW(hMenu, MF_STRING, IDM_STORAGE_CHECK, L"Storage Guardian: Check Status");
+    AppendMenuW(hMenu, MF_STRING, IDM_RESET_ZOOM,    L"Reset Zoom (100%)");
+    AppendMenuW(hMenu, MF_STRING, IDM_RESTART_SVC,   L"Rescan Snipping Tool");
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
 
     // 5. Exit
@@ -942,6 +1096,46 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             DwmSetWindowAttribute(hWnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &darkMode, sizeof(darkMode));
             DWORD corner = 2; // DWMWCP_ROUND
             DwmSetWindowAttribute(hWnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
+
+            // Set recurring timer for Storage Guardian check (every 4 hours)
+            SetTimer(hWnd, TIMER_STORAGE_GUARDIAN, 4 * 3600 * 1000, NULL);
+            // Run initial check 10 seconds after startup
+            SetTimer(hWnd, TIMER_STORAGE_STARTUP, 10000, NULL);
+            break;
+        }
+
+        case WM_POWERBROADCAST: {
+            if (wParam == PBT_APMRESUMEAUTOMATIC || wParam == PBT_APMRESUMESUSPEND) {
+                // Sleep / Modern Standby Wake Recovery:
+                // Give GPU display driver 1.5s to restore true monitor modes and refresh rates
+                SetTimer(hWnd, TIMER_SLEEP_RECOVERY, 1500, NULL);
+            }
+            return TRUE;
+        }
+
+        case WM_DISPLAYCHANGE: {
+            // Fired when user changes refresh rate, resolution, or plugs in/unplugs an external display
+            SetTimer(hWnd, TIMER_SLEEP_RECOVERY, 500, NULL);
+            break;
+        }
+
+        case WM_TIMER: {
+            if (wParam == TIMER_SLEEP_RECOVERY) {
+                KillTimer(hWnd, TIMER_SLEEP_RECOVERY);
+                UpdateTrayTooltip();
+
+                // Re-verify injection into any active SnippingTool instance
+                WCHAR dllPath[MAX_PATH];
+                LocateDllPath(dllPath);
+                ScanAndInject(dllPath);
+
+                InvalidateRect(hWnd, NULL, FALSE);
+            } else if (wParam == TIMER_STORAGE_GUARDIAN) {
+                RunStorageGuardian(hWnd, FALSE);
+            } else if (wParam == TIMER_STORAGE_STARTUP) {
+                KillTimer(hWnd, TIMER_STORAGE_STARTUP);
+                RunStorageGuardian(hWnd, FALSE);
+            }
             break;
         }
 
@@ -1097,6 +1291,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
                 case IDM_RECORD: LaunchSnippingTool(); break;
                 case IDM_FOLDER: OpenRecordingsFolder(); break;
                 case IDM_ANALYZE: AnalyzeLatestRecording(hWnd); break;
+                case IDM_STORAGE_CHECK: RunStorageGuardian(hWnd, TRUE); break;
 
                 case IDM_FPS_AUTO: g_CurrentFPS = 0;   SaveSettings(); UpdateTrayTooltip(); InvalidateRect(hWnd, NULL, FALSE); break;
                 case IDM_FPS_60:   g_CurrentFPS = 60;  SaveSettings(); UpdateTrayTooltip(); InvalidateRect(hWnd, NULL, FALSE); break;
