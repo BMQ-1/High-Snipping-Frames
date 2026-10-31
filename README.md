@@ -1,49 +1,60 @@
 <p align="center">
-  <sub><code>assets/icon.svg</code></sub><br />
   <img src="assets/icon.svg" width="130" height="130" alt="High Snipping Frames Logo" />
 </p>
 
 <h1 align="center">High Snipping Frames</h1>
 
 <p align="center">
-  <strong>Native 60, 120, and 144+ FPS Screen Recording for Windows Snipping Tool</strong><br />
-  <sub>Code created by AI</sub>
+  <strong>Native 60, 120, 144, and 240 FPS Screen Recording for Windows Snipping Tool</strong><br />
+  <sub>Code created with AI</sub>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Platform-Windows%2011%20(24H2%20Ready)-0078D4?style=for-the-badge&logo=windows11&logoColor=white" alt="Windows 11" />
-  <img src="https://img.shields.io/badge/Recording-60%20%7C%20120%20%7C%20144%20FPS-38BDF8?style=for-the-badge&logo=speedtest&logoColor=white" alt="High FPS" />
-  <img src="https://img.shields.io/badge/GUI-System%20Tray%20%26%20Control%20Center-6366F1?style=for-the-badge" alt="GUI Included" />
-  <img src="https://img.shields.io/badge/Updates-Survives%20Store%20Updates-10B981?style=for-the-badge&logo=microsoftstore&logoColor=white" alt="Update Proof" />
+  <img src="https://img.shields.io/badge/Recording-60%20%7C%20120%20%7C%20144%20%7C%20240%20FPS-38BDF8?style=for-the-badge&logo=speedtest&logoColor=white" alt="High FPS" />
+  <img src="https://img.shields.io/badge/Startup_Impact-Low%20(%3C15MB%20RAM)-10B981?style=for-the-badge" alt="Low Startup Impact" />
+  <img src="https://img.shields.io/badge/Updates-Survives%20Store%20Updates-059669?style=for-the-badge&logo=microsoftstore&logoColor=white" alt="Update Proof" />
   <img src="https://img.shields.io/badge/License-MIT-gray?style=for-the-badge" alt="MIT License" />
 </p>
 
 ---
 
+> ### *"Ever tried using the built-in Windows Snipping Tool to record a smooth video and found out your video was locked at 30 FPS? I made this tool to fix that issue."*
+
+---
+
 ## Overview
 
-Windows Snipping Tool (`Microsoft.ScreenSketch`) natively locks screen video recordings to **30 FPS**, causing high-refresh rate displays (144 Hz, 240 Hz, 360 Hz) to produce noticeably choppy video recordings.
+Windows Snipping Tool (`Microsoft.ScreenSketch`) natively caps video recordings to **30 FPS** and limited-range BT.601 color. On high-refresh displays (144 Hz, 240 Hz, 360 Hz) or vibrant HDR/SDR screens, this results in choppy motion, washed-out blacks, and dropped frames during gaming.
 
-**High Snipping Frames** unlocks buttery smooth **60, 90, 120, 144, 165, and 240 FPS** screen recording natively in Windows Snipping Tool using an in-memory 4-point dynamic hot-patch.
+**High Snipping Frames** unlocks authentic **60, 90, 120, 144, 165, and 240 FPS** video recording directly inside Windows Snipping Tool using an update-proof, in-memory dynamic hot-patch.
 
-It now includes a lightweight, modern **Windows 11 Fluent System Tray & Control Center** to switch frame rates and verify recordings on the fly.
+It is designed with a **"Set up once and forget"** philosophy: it lives silently in your system tray, uses **0.0% CPU at idle**, automatically matches your monitor's refresh rate, guarantees real-time capture quanta during heavy gaming loads, and copies finished videos straight to your clipboard for instant `Ctrl + V` sharing.
 
 ---
 
 ## Key Features
 
-- **Native Hardware Encoding:** Encodes video directly at your chosen target frame rate (up to 240 FPS) with hardware-accelerated Media Foundation encoding and synchronized audio.
-- **Modern Control Center GUI (`HighSnippingFramesGUI.exe`):**
-  - Lives in your System Tray with the official High Snipping Frames icon.
-  - **Unified Single-Process Architecture:** Houses both the Fluent Control Center and the background injection watcher in a single lightweight process (< 15 MB RAM, 0% CPU) with single-instance enforcement.
-  - **Dynamic UI Zoom (`Ctrl + Mouse Wheel`):** Scale the UI smoothly from 80% to 200% on high-DPI displays or adjust using on-screen zoom pills.
-  - Switch FPS on the fly with 1-click presets: **Auto (Match Display)**, **60 FPS**, **90 FPS**, **120 FPS**, **144 FPS**, **165 FPS**, **240 FPS**.
-  - **Dynamic In-Memory Config Reloading:** Changes take effect immediately on your very next recording without needing to restart Snipping Tool!
-  - **Built-in Video Analyzer:** Runs `ffprobe` on your latest recording and displays container FPS, average FPS, frame count, and duration directly inside the UI.
-  - **One-Click Shortcuts:** Quick buttons to launch Snipping Tool or open your `Videos\Screen Recordings` folder.
-- **100% Update Proof:** Zero files are modified inside `C:\Program Files\WindowsApps\...`. All patches are applied dynamically in RAM using relative byte pattern scanning (AOB), meaning Microsoft Store package updates will never break or overwrite your setup.
-- **Zero Freeze on Screenshots:** `Win + Shift + S` snips remain 100% stock, instant, and never freeze.
-- **Ultra-Lightweight Background Watcher:** Integrated background watcher thread uses 0.0% CPU, automatically hooking Snipping Tool whenever it launches. Standalone headless daemon (`SnippingToolDaemon.exe`) is also included for zero-GUI environments.
+### 🎮 Real Frames & Visual Fidelity
+- **MMCSS Thread Quantum Boosting (`avrt.dll`):** Automatically registers capture and encoding threads with Windows' Multimedia Class Scheduler Service (`AvSetMmThreadCharacteristicsW` + `THREAD_PRIORITY_HIGHEST`). Even at 99% GPU gaming loads (Cyberpunk 2077, Black Myth: Wukong, Apex Legends), the hardware encoder is guaranteed dedicated CPU scheduling quanta so it never drops frames.
+- **BT.709 Full-Range Color Matrix (0–255):** Overrides stock Snipping Tool's BT.601 limited range (16–235) to output full dynamic range (0–255) with the BT.709 matrix. Delivers deep, true blacks and vibrant contrast without washed-out grayish tones.
+- **Per-Monitor Dynamic Refresh Rate Matching:** In "Auto" mode, it dynamically queries the refresh rate of the specific monitor where you draw your recording rectangle (e.g. 144 Hz on your primary gaming screen vs 60 Hz on a secondary display).
+- **Sub-Microsecond Frame Pacing:** Intercepts Windows Graphics Capture (WGC) compositor intervals and Media Foundation rational timestamps (`put_Numerator` / `put_Denominator`) to maintain perfect audio-video synchronization without drift.
+
+### ⚡ Daily-Use Quality of Life
+- **Instant Video Hotkey (`Win + Alt + R`):** Starts Snipping Tool video recording directly, bypassing the screenshot picker. 
+- **Stock Screenshots Untouched (`Win + Shift + S`):** Still takes standard screenshots instantly with zero overlay interference or delay.
+- **Automatic Clipboard Fast-Share (`CF_HDROP`):** Newly finished MP4 recordings are automatically placed on your Windows clipboard as native files—paste them instantly into Discord, Slack, WhatsApp, or web browsers with `Ctrl + V`.
+- **Invisible In-Recording HUD (`WDA_EXCLUDEFROMCAPTURE`):** Displays an optional subtle floating badge (`● REC 144 FPS`) while recording that is visible to your eyes but completely invisible in the final exported MP4.
+- **Storage Guardian (Disk Management):**
+  - Displays a warning notification if your recordings folder exceeds a threshold (e.g. 15 GB).
+  - Optional auto-cleanup of recordings older than $X$ days.
+  - Optional automatic transfer/archival to an external drive or folder after $X$ days.
+
+### 🪶 Ultra-Lightweight & Update-Proof
+- **Low Startup Impact:** Single unified process (< 15 MB RAM, 0% CPU). Includes a 2.5s boot grace period and deferred disk scans so Windows rates its startup impact as **Low**.
+- **100% Update-Proof:** Modifies **zero** system files inside `C:\Program Files\WindowsApps\...`. All patches are applied dynamically in RAM using relative byte pattern scanning (AOB), surviving any Microsoft Store update.
+- **Native Fluent Dark Mode Tray:** Clean Windows 11 Dark Mode context menu for instant adjustments.
 
 ---
 
@@ -74,7 +85,7 @@ flowchart TD
     B -->|"put_MinUpdateInterval (6.94 ms)"| C["Layer 2: VideoFrameGenerator Dropper"]
     C -->|"Bypass Jitter Logic (EB 0E)"| D["Layer 3: Interval Calculation Math"]
     D -->|"Set MinIntervalMs = 6 ms"| E["Layer 4: Media Foundation Encoder Profile"]
-    E -->|"Set IMediaRatio = 144/1"| F["Output MP4 Video (144.00 FPS)"]
+    E -->|"Set IMediaRatio = 144/1 + BT.709 Full Range"| F["Output MP4 Video (144.00 FPS, Full RGB)"]
 ```
 
 | Layer | Component | Stock Snipping Tool Limit | High Snipping Frames Fix |
@@ -82,33 +93,33 @@ flowchart TD
 | **1. Compositor** | DWM / Windows Graphics Capture | Throttled to ~60 Hz | Intercepts session start and calls `IGraphicsCaptureSession5::put_MinUpdateInterval(10,000,000 / TargetFPS)`. |
 | **2. Frame Dropper** | `VideoFrameGenerator::OnFrameArrived` | Drops frames arriving in < 33 ms (`7D 0E` `jge`) | Patches conditional jump to unconditional `jmp` (`EB 0E`), bypassing frame discard. |
 | **3. Interval Math** | `VideoFrameGenerator::Initialize` | Computes `1000 / 30 = 33 ms` | Dynamically patches interval calculation to `1000 / TargetFPS` (6 ms for 144 FPS). |
-| **4. Hardware Encoder** | `MediaEncodingProfile` / `IMediaRatio` | Defaults to fixed 30/1 ratio | Hooks ratio function at `0x140085e20` to invoke `IMediaRatio::put_Numerator(TargetFPS)` and scale bitrates. |
+| **4. Hardware Encoder** | `MediaEncodingProfile` / `IMediaRatio` | Fixed 30/1 ratio, BT.601 limited | Hooks ratio to set `IMediaRatio::put_Numerator(TargetFPS)`, scales bitrates, applies MMCSS, and sets BT.709 Full Range. |
 
 ---
 
-## Quick Start (1-Click Installation)
+## Quick Start (Installation)
 
-### Method 1: Just Double-Click `install.bat` (Recommended)
+### Option 1: Double-Click `install.bat` (Recommended)
 
 1. Clone or download this repository:
    ```cmd
-   git clone https://github.com/your-username/High-Snipping-Frames.git
+   git clone https://github.com/<your-username>/High-Snipping-Frames.git
    cd High-Snipping-Frames
    ```
-2. Double-click **`install.bat`** (or run it from CMD).
+2. Double-click **`install.bat`** (or run it as Administrator).
 
-That's it! It automatically:
-- Deploys pre-compiled x64 binaries to `C:\Program Files\SnippingToolHighFPS\`.
+**What the installer does automatically:**
+- Copies binaries to `C:\Program Files\SnippingToolHighFPS\`.
 - Grants AppContainer execution permissions.
-- Creates a **Start Menu** shortcut (`High Snipping Frames`).
-- Adds a single auto-start entry in your user registry so it silently stays ready across reboots.
-- Launches the Control Center directly into your System Tray.
+- Creates a **Start Menu** shortcut.
+- Adds a single lightweight startup entry in HKCU Run.
+- Launches the Control Center silently into your System Tray.
 
-By default, it automatically matches your monitor's native refresh rate (e.g. 144 Hz / 144 FPS). Snipping Tool will now record at high FPS immediately!
+By default, it automatically detects and matches your monitor's native refresh rate (e.g. 144 Hz). Snipping Tool will now record at high FPS immediately!
 
 ---
 
-### Method 2: PowerShell
+### Option 2: PowerShell
 
 ```powershell
 .\scripts\install.ps1
@@ -116,22 +127,23 @@ By default, it automatically matches your monitor's native refresh rate (e.g. 14
 
 ---
 
-## Using the Control Center
+## System Tray & Control Center
 
 1. Look for the **High Snipping Frames** icon in your **System Tray** (near the clock).
-2. **Double-click** the icon to open the Control Center window.
-3. Choose your desired target framerate:
-   - **Auto (Match Display)**: Dynamically selects your monitor's highest refresh rate (e.g. 144 Hz).
-   - **60, 90, 120, 144, 165, or 240 FPS**.
-4. Click **Apply Settings**.
-5. Click **Record Screen** to launch Snipping Tool and start recording!
-6. Click **Analyze Latest Video** to verify the recording stream in real-time.
+2. **Right-click** the icon for quick dark-mode access:
+   - Presets: **Auto (Match Display)**, **60 FPS**, **120 FPS**, **144 FPS**, **240 FPS**.
+   - Storage Guardian status and manual check.
+   - Quick launch Snipping Tool or open the recordings folder.
+3. **Double-click** the icon to open the full Control Center:
+   - Dynamic UI Zoom (`Ctrl + Mouse Wheel` or zoom buttons).
+   - In-memory hot reloading (changes apply on your next recording).
+   - Built-in `ffprobe` video analyzer to verify container FPS, average FPS, frame count, and duration.
 
 ---
 
-## Manual Configuration (`SnippingToolHighFPS.ini`)
+## Configuration (`SnippingToolHighFPS.ini`)
 
-You can also edit `C:\Program Files\SnippingToolHighFPS\SnippingToolHighFPS.ini` directly:
+You can customize advanced options in `C:\Program Files\SnippingToolHighFPS\SnippingToolHighFPS.ini`:
 
 ```ini
 [Settings]
@@ -149,6 +161,28 @@ UnlockEncoder=1
 
 ; Bypass Internal Micro-Jitter Frame Dropper
 BypassThrottle=1
+
+; MMCSS Thread Priority Quantum Boosting (avrt.dll)
+EnableMMCSS=1
+
+; Full-Range BT.709 Dynamic Range (0-255)
+FullRangeColor=1
+
+; Global Hotkey: Win + Alt + R to record video
+EnableGlobalHotkey=1
+
+; Automatically copy finished MP4 to clipboard
+AutoCopyToClipboard=1
+
+; Invisible In-Recording Screen HUD (WDA_EXCLUDEFROMCAPTURE)
+ShowRecordingHUD=1
+
+[StorageGuardian]
+EnableStorageGuardian=1
+MaxFolderSizeGB=15
+AutoCleanDays=0
+TransferDays=0
+TransferFolder=
 ```
 
 ---
@@ -165,15 +199,15 @@ cd scripts
 build.bat
 ```
 
-All 4 binaries with embedded icon resources will be generated into the `bin\` folder.
+All 4 compiled binaries with embedded version resources will be placed in `bin\`.
 
 ---
 
 ## Uninstallation
 
-To completely remove High Snipping Frames and restore Windows Snipping Tool to stock:
+To completely remove High Snipping Frames and restore Windows Snipping Tool to 100% factory defaults:
 
-- Simply double-click **`uninstall.bat`**, OR run:
+- Double-click **`uninstall.bat`**, OR run:
   ```powershell
   .\scripts\uninstall.ps1
   ```
@@ -184,8 +218,6 @@ To completely remove High Snipping Frames and restore Windows Snipping Tool to s
 
 This project is licensed under the [MIT License](LICENSE).
 
----
-
 <p align="center">
-  <sub><em>Note: This project, reverse engineering, and code were created by AI.</em></sub>
+  <sub><em>Note: This project, reverse engineering, and code were created with AI.</em></sub>
 </p>

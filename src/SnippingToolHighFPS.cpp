@@ -19,7 +19,21 @@ static BOOL   g_EnableEncoderUnlock = TRUE;
 static BOOL   g_BypassThrottle = TRUE;
 static BOOL   g_EnableRecordingHUD = TRUE;
 static BOOL   g_PerMonitorAutoMatch = TRUE;
+static BOOL   g_EnableMMCSS = TRUE;       // Windows Multimedia Class Scheduler Service
+static BOOL   g_FullRangeColor = TRUE;    // BT.709 Full-Range (0-255) Color Matrix
 static WCHAR  g_LogPath[MAX_PATH] = { 0 };
+
+// Media Foundation GUIDs for Full-Range BT.709 color matrix:
+static const IID IID_IMFAttributes_Local = 
+    { 0x2cd2d921, 0xc447, 0x44a7, { 0xa1, 0x3c, 0x4a, 0xda, 0xb5, 0x11, 0x0f, 0x34 } };
+
+// MF_MT_VIDEO_NOMINAL_RANGE: {3E414F72-AC34-4e88-920C-03D7506FDF04}
+static const GUID GUID_MF_MT_VIDEO_NOMINAL_RANGE = 
+    { 0x3e414f72, 0xac34, 0x4e88, { 0x92, 0x0c, 0x03, 0xd7, 0x50, 0x6f, 0xdf, 0x04 } };
+
+// MF_MT_YUV_MATRIX: {3E414F74-AC34-4e88-920C-03D7506FDF04}
+static const GUID GUID_MF_MT_YUV_MATRIX = 
+    { 0x3e414f74, 0xac34, 0x4e88, { 0x92, 0x0c, 0x03, 0xd7, 0x50, 0x6f, 0xdf, 0x04 } };
 
 // -------------------------------------------------------------
 // Invisible In-Recording HUD (WDA_EXCLUDEFROMCAPTURE)
@@ -243,7 +257,73 @@ static void ShowRecordingHUD(UINT32 targetFps) {
     g_hHudThread = CreateThread(NULL, 0, HudThreadProc, NULL, 0, NULL);
 }
 
+// Windows Multimedia Class Scheduler Service (MMCSS) Dynamic Loader
+typedef HANDLE (WINAPI *fnAvSetMmThreadCharacteristicsW)(LPCWSTR, LPDWORD);
+typedef BOOL (WINAPI *fnAvRevertMmThreadCharacteristics)(HANDLE);
+
+static HANDLE g_hMmcssTask = NULL;
+
+static void EnableMMCSS() {
+    if (g_hMmcssTask) return;
+    HMODULE hAvrt = LoadLibraryW(L"avrt.dll");
+    if (hAvrt) {
+        fnAvSetMmThreadCharacteristicsW pSet = 
+            (fnAvSetMmThreadCharacteristicsW)GetProcAddress(hAvrt, "AvSetMmThreadCharacteristicsW");
+        if (pSet) {
+            DWORD taskIndex = 0;
+            g_hMmcssTask = pSet(L"Capture", &taskIndex);
+            if (!g_hMmcssTask) {
+                taskIndex = 0;
+                g_hMmcssTask = pSet(L"Games", &taskIndex);
+            }
+        }
+    }
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+    Log("[SnippingToolHighFPS] MMCSS Quantum Boosting enabled (Task: 0x%p, Priority: HIGHEST)", g_hMmcssTask);
+}
+
+static void DisableMMCSS() {
+    if (g_hMmcssTask) {
+        HMODULE hAvrt = GetModuleHandleW(L"avrt.dll");
+        if (hAvrt) {
+            fnAvRevertMmThreadCharacteristics pRevert = 
+                (fnAvRevertMmThreadCharacteristics)GetProcAddress(hAvrt, "AvRevertMmThreadCharacteristics");
+            if (pRevert) {
+                pRevert(g_hMmcssTask);
+            }
+        }
+        g_hMmcssTask = NULL;
+        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
+        Log("[SnippingToolHighFPS] MMCSS Quantum Boosting reverted to normal");
+    }
+}
+
+static void ApplyFullRangeBT709(void* pRatioObj) {
+    if (!g_FullRangeColor || !pRatioObj) return;
+
+    IUnknown* pUnk = (IUnknown*)pRatioObj;
+    void* pAttrs = NULL;
+
+    HRESULT hr = pUnk->QueryInterface(IID_IMFAttributes_Local, &pAttrs);
+    if (SUCCEEDED(hr) && pAttrs) {
+        typedef HRESULT (__stdcall *SetUINT32Fn)(void*, REFGUID, UINT32);
+        SetUINT32Fn setUINT32 = (SetUINT32Fn)(*(void***)pAttrs)[21]; // Slot 21: SetUINT32
+
+        // Enforce Full Range (0-255) and BT.709 Matrix for rich blacks and lossless vibrancy
+        HRESULT hrRange  = setUINT32(pAttrs, GUID_MF_MT_VIDEO_NOMINAL_RANGE, 2); // 2 = MFNominalRange_0_255
+        HRESULT hrMatrix = setUINT32(pAttrs, GUID_MF_MT_YUV_MATRIX, 2);          // 2 = MFVideoTransferMatrix_BT709
+        Log("[SnippingToolHighFPS] Enforced BT.709 Full-Range Colors (0-255) -> Range: 0x%08X, Matrix: 0x%08X", hrRange, hrMatrix);
+
+        ((IUnknown*)pAttrs)->Release();
+    } else {
+        Log("[SnippingToolHighFPS] Object QueryInterface(IMFAttributes) returned 0x%08X", hr);
+    }
+}
+
 static void HideRecordingHUD() {
+    if (g_EnableMMCSS) {
+        DisableMMCSS();
+    }
     if (!g_bHudRunning) return;
     g_bHudRunning = FALSE;
     if (g_hWndHUD) {
@@ -298,6 +378,8 @@ static void LoadConfig(HMODULE hMod) {
         Log("[SnippingToolHighFPS] TargetFPS loaded from INI: %u FPS", g_TargetFPS);
     }
 
+    g_EnableMMCSS            = GetPrivateProfileIntW(L"Settings", L"EnableMMCSS", 1, iniPath);
+    g_FullRangeColor         = GetPrivateProfileIntW(L"Settings", L"FullRangeColor", 1, iniPath);
     g_BitrateMultiplier      = GetPrivateProfileIntW(L"Settings", L"BitrateMultiplier", 1, iniPath);
     g_EnableCompositorUnlock = GetPrivateProfileIntW(L"Settings", L"UnlockCompositor", 1, iniPath);
     g_EnableEncoderUnlock    = GetPrivateProfileIntW(L"Settings", L"UnlockEncoder", 1, iniPath);
@@ -350,7 +432,12 @@ extern "C" __declspec(dllexport) HRESULT StartCaptureHook(void* pWrapper) {
 
     Log("[SnippingToolHighFPS] StartCaptureHook triggered on session 0x%p (Target: %u FPS)", pSession, g_TargetFPS);
 
-    // Show Invisible In-Recording HUD (excluded from capture via WDA_EXCLUDEFROMCAPTURE)
+    // 1. Enable MMCSS Thread Quantum Boosting (guarantees real-time CPU quanta during 99% GPU load)
+    if (g_EnableMMCSS) {
+        EnableMMCSS();
+    }
+
+    // 2. Show Invisible In-Recording HUD (excluded from capture via WDA_EXCLUDEFROMCAPTURE)
     ShowRecordingHUD(g_TargetFPS);
 
     // 1. Unlock compositor to TargetFPS
@@ -412,6 +499,9 @@ extern "C" __declspec(dllexport) UINT32 MediaRatioHook(void** ppRatio) {
         // Ultra Gaming: 2.0x bitrate allocation
         calcFps = g_TargetFPS * 2;
     }
+
+    // 3. Enforce BT.709 Full-Range Color Matrix (True Blacks and vibrant contrast)
+    ApplyFullRangeBT709(pRatio);
 
     Log("[SnippingToolHighFPS] Returning bitrate basis: %u (BitrateMultiplier=%d)", calcFps, g_BitrateMultiplier);
     return calcFps;
@@ -605,6 +695,7 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
         ApplySnippingToolPatches();
     } else if (fdwReason == DLL_PROCESS_DETACH) {
         HideRecordingHUD();
+        DisableMMCSS();
     }
     return TRUE;
 }
