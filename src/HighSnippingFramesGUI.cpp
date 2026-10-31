@@ -837,6 +837,33 @@ static int HitTest(int mouseX, int mouseY, int* pData) {
     return HIT_NONE;
 }
 
+// Native Windows 11 Fluent Dark Theme Enabler for Menus and Controls
+static void InitDarkMode() {
+    HMODULE hUxTheme = LoadLibraryW(L"uxtheme.dll");
+    if (hUxTheme) {
+        // Ordinal 135: SetPreferredAppMode (2 = ForceDark, 1 = AllowDark)
+        typedef int (WINAPI *fnSetPreferredAppMode)(int appMode);
+        fnSetPreferredAppMode pSetPreferredAppMode = (fnSetPreferredAppMode)GetProcAddress(hUxTheme, MAKEINTRESOURCEA(135));
+        if (pSetPreferredAppMode) {
+            pSetPreferredAppMode(2); // ForceDark
+        } else {
+            // Ordinal 133: AllowDarkModeForApp fallback for older Win10
+            typedef BOOL (WINAPI *fnAllowDarkModeForApp)(BOOL allow);
+            fnAllowDarkModeForApp pAllowDarkModeForApp = (fnAllowDarkModeForApp)GetProcAddress(hUxTheme, MAKEINTRESOURCEA(133));
+            if (pAllowDarkModeForApp) {
+                pAllowDarkModeForApp(TRUE);
+            }
+        }
+
+        // Ordinal 136: FlushMenuThemes to immediately apply dark style to popup menus
+        typedef void (WINAPI *fnFlushMenuThemes)();
+        fnFlushMenuThemes pFlushMenuThemes = (fnFlushMenuThemes)GetProcAddress(hUxTheme, MAKEINTRESOURCEA(136));
+        if (pFlushMenuThemes) {
+            pFlushMenuThemes();
+        }
+    }
+}
+
 static void UpdateTrayTooltip() {
     if (g_CurrentFPS == 0) {
         swprintf(g_nid.szTip, 128, L"High Snipping Frames - Auto (%u Hz)", GetMaxDisplayRefresh());
@@ -846,7 +873,7 @@ static void UpdateTrayTooltip() {
     Shell_NotifyIconW(NIM_MODIFY, &g_nid);
 }
 
-// Show Tray Context Menu - Modern, structured, and easy to read
+// Show Tray Context Menu - Clean, native Windows 11 Dark Mode, no emojis
 static void ShowTrayMenu(HWND hWnd) {
     POINT pt;
     GetCursorPos(&pt);
@@ -856,50 +883,50 @@ static void ShowTrayMenu(HWND hWnd) {
     UINT32 maxRefresh = GetMaxDisplayRefresh();
     WCHAR headerStr[128];
     if (g_CurrentFPS == 0) {
-        swprintf(headerStr, 128, L"⚡ High Snipping Frames  •  Auto (%u Hz)", maxRefresh);
+        swprintf(headerStr, 128, L"High Snipping Frames (Auto %u Hz)", maxRefresh);
     } else {
-        swprintf(headerStr, 128, L"⚡ High Snipping Frames  •  %u FPS", g_CurrentFPS);
+        swprintf(headerStr, 128, L"High Snipping Frames (%u FPS)", g_CurrentFPS);
     }
     AppendMenuW(hMenu, MF_STRING | MF_DISABLED, 0, headerStr);
-    AppendMenuW(hMenu, MF_STRING, IDM_OPEN, L"⚙  Open Control Center");
+    AppendMenuW(hMenu, MF_STRING, IDM_OPEN, L"Open Control Center");
     SetMenuDefaultItem(hMenu, IDM_OPEN, FALSE);
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
 
-    // 2. Framerate Selection Submenu (with active target previewed right in label)
+    // 2. Framerate Selection Submenu (active target previewed right in label)
     HMENU hFpsMenu = CreatePopupMenu();
     
     WCHAR autoLabel[64];
-    swprintf(autoLabel, 64, L"Auto (Match Monitor - %u Hz)", maxRefresh);
+    swprintf(autoLabel, 64, L"Auto (Match Display - %u Hz)", maxRefresh);
     AppendMenuW(hFpsMenu, MF_STRING | ((g_CurrentFPS == 0)   ? MF_CHECKED : MF_UNCHECKED), IDM_FPS_AUTO, autoLabel);
-    AppendMenuW(hFpsMenu, MF_STRING | ((g_CurrentFPS == 60)  ? MF_CHECKED : MF_UNCHECKED), IDM_FPS_60,   L"60 FPS  (Balanced)");
+    AppendMenuW(hFpsMenu, MF_STRING | ((g_CurrentFPS == 60)  ? MF_CHECKED : MF_UNCHECKED), IDM_FPS_60,   L"60 FPS (Balanced)");
     AppendMenuW(hFpsMenu, MF_STRING | ((g_CurrentFPS == 90)  ? MF_CHECKED : MF_UNCHECKED), IDM_FPS_90,   L"90 FPS");
-    AppendMenuW(hFpsMenu, MF_STRING | ((g_CurrentFPS == 120) ? MF_CHECKED : MF_UNCHECKED), IDM_FPS_120,  L"120 FPS (High Motion)");
-    AppendMenuW(hFpsMenu, MF_STRING | ((g_CurrentFPS == 144) ? MF_CHECKED : MF_UNCHECKED), IDM_FPS_144,  L"144 FPS (Ultra Smooth)");
+    AppendMenuW(hFpsMenu, MF_STRING | ((g_CurrentFPS == 120) ? MF_CHECKED : MF_UNCHECKED), IDM_FPS_120,  L"120 FPS (High)");
+    AppendMenuW(hFpsMenu, MF_STRING | ((g_CurrentFPS == 144) ? MF_CHECKED : MF_UNCHECKED), IDM_FPS_144,  L"144 FPS (Ultra)");
     AppendMenuW(hFpsMenu, MF_STRING | ((g_CurrentFPS == 165) ? MF_CHECKED : MF_UNCHECKED), IDM_FPS_165,  L"165 FPS");
     AppendMenuW(hFpsMenu, MF_STRING | ((g_CurrentFPS == 240) ? MF_CHECKED : MF_UNCHECKED), IDM_FPS_240,  L"240 FPS (Esports)");
 
     WCHAR curFpsStr[64];
     if (g_CurrentFPS == 0) {
-        swprintf(curFpsStr, 64, L"🎯 Target Framerate: Auto (%u Hz)", maxRefresh);
+        swprintf(curFpsStr, 64, L"Target Framerate (Auto %u Hz)", maxRefresh);
     } else {
-        swprintf(curFpsStr, 64, L"🎯 Target Framerate: %u FPS", g_CurrentFPS);
+        swprintf(curFpsStr, 64, L"Target Framerate (%u FPS)", g_CurrentFPS);
     }
     AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hFpsMenu, curFpsStr);
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
 
     // 3. Quick Actions
-    AppendMenuW(hMenu, MF_STRING, IDM_RECORD,  L"📹 Start Screen Recording");
-    AppendMenuW(hMenu, MF_STRING, IDM_FOLDER,  L"📂 Open Recordings Folder");
-    AppendMenuW(hMenu, MF_STRING, IDM_ANALYZE, L"🔬 Verify Latest Video (ffprobe)");
+    AppendMenuW(hMenu, MF_STRING, IDM_RECORD,  L"Record Screen (Snipping Tool)");
+    AppendMenuW(hMenu, MF_STRING, IDM_FOLDER,  L"Open Recordings Folder");
+    AppendMenuW(hMenu, MF_STRING, IDM_ANALYZE, L"Verify Latest Video");
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
 
     // 4. Utility / System
-    AppendMenuW(hMenu, MF_STRING, IDM_RESET_ZOOM,  L"🔍 Reset UI Zoom (100%)");
-    AppendMenuW(hMenu, MF_STRING, IDM_RESTART_SVC, L"🔄 Rescan Snipping Tool");
+    AppendMenuW(hMenu, MF_STRING, IDM_RESET_ZOOM,  L"Reset Zoom (100%)");
+    AppendMenuW(hMenu, MF_STRING, IDM_RESTART_SVC, L"Rescan Snipping Tool");
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
 
     // 5. Exit
-    AppendMenuW(hMenu, MF_STRING, IDM_EXIT, L"❌ Exit");
+    AppendMenuW(hMenu, MF_STRING, IDM_EXIT, L"Exit");
 
     SetForegroundWindow(hWnd);
     TrackPopupMenu(hMenu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hWnd, NULL);
@@ -1136,6 +1163,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 }
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow) {
+    InitDarkMode();
     g_hInstance = hInstance;
 
     GdiplusStartupInput gdiplusStartupInput;
