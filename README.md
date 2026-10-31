@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Native 60, 120, 144, and 240 FPS Screen Recording for Windows Snipping Tool</strong><br />
-  <sub>✨ Designed, reverse-engineered, and built with AI</sub>
+  <sub>This full project was made by AI</sub>
 </p>
 
 <p align="center">
@@ -220,5 +220,5 @@ To completely remove High Snipping Frames and restore Windows Snipping Tool to 1
 This project is licensed under the [MIT License](LICENSE).
 
 <p align="center">
-  <sub><em>Note: This project, reverse engineering, and code were created with AI.</em></sub>
+  <sub><em>Note: This full project was made by AI.</em></sub>
 </p>
