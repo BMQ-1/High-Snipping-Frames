@@ -129,10 +129,22 @@ static UINT32 DetectActiveMonitorRefreshRate() {
     return DetectPrimaryRefreshRate();
 }
 
-static float GetHudScale(HWND hWnd) {
-    HDC hdc = GetDC(hWnd);
-    int dpi = GetDeviceCaps(hdc, LOGPIXELSY);
-    ReleaseDC(hWnd, hdc);
+typedef HRESULT (WINAPI *fnGetDpiForMonitor)(HMONITOR, int, UINT*, UINT*);
+
+static float GetMonitorScale(HMONITOR hMon) {
+    HMODULE hShcore = LoadLibraryW(L"shcore.dll");
+    if (hShcore) {
+        fnGetDpiForMonitor pGetDpi = (fnGetDpiForMonitor)GetProcAddress(hShcore, "GetDpiForMonitor");
+        if (pGetDpi) {
+            UINT dpiX = 96, dpiY = 96;
+            if (SUCCEEDED(pGetDpi(hMon, 0, &dpiX, &dpiY)) && dpiY > 0) {
+                return (float)dpiY / 96.0f;
+            }
+        }
+    }
+    HDC hdcScreen = GetDC(NULL);
+    int dpi = GetDeviceCaps(hdcScreen, LOGPIXELSY);
+    ReleaseDC(NULL, hdcScreen);
     float s = (dpi > 0) ? ((float)dpi / 96.0f) : 1.0f;
     return (s < 1.0f) ? 1.0f : s;
 }
@@ -161,7 +173,8 @@ static LRESULT CALLBACK HudWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lP
             RECT rc;
             GetClientRect(hWnd, &rc);
 
-            float s = GetHudScale(hWnd);
+            HMONITOR hMon = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
+            float s = GetMonitorScale(hMon);
 
             // Double buffering
             HDC memDC = CreateCompatibleDC(hdc);
@@ -247,10 +260,7 @@ static DWORD WINAPI HudThreadProc(LPVOID lpParam) {
     MONITORINFO mi = { sizeof(mi) };
     GetMonitorInfoW(hMon, &mi);
 
-    HDC hdcScreen = GetDC(NULL);
-    int dpi = GetDeviceCaps(hdcScreen, LOGPIXELSY);
-    ReleaseDC(NULL, hdcScreen);
-    float s = (dpi > 0) ? ((float)dpi / 96.0f) : 1.0f;
+    float s = GetMonitorScale(hMon);
     if (s < 1.0f) s = 1.0f;
 
     int w = (int)(164.0f * s + 0.5f);

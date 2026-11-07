@@ -79,6 +79,8 @@ static DWORD g_AutoCleanDays           = 0;         // Auto-delete recordings ol
 // Part 3: Instant Video Hotkey & Clipboard Fast-Share
 static BOOL  g_EnableGlobalHotkey      = TRUE;      // Win + Alt + R
 static BOOL  g_AutoCopyToClipboard     = TRUE;      // Automatically put fresh MP4 into Windows clipboard
+static BOOL  g_bHotkeyRegistered       = FALSE;     // Tracks whether Win + Alt + R registered successfully
+static UINT  g_uMsgTaskbarCreated      = 0;         // Explorer taskbar restart message
 
 // Hit test IDs (in base logical coordinates)
 #define HIT_NONE           0
@@ -107,6 +109,34 @@ static const WCHAR* g_QualityDescs[]  = { L"Standard bitrates, smaller file size
 static const int g_NumQualityOptions = 3;
 
 // Helper: Locate INI Path
+// Helper: Get active Screen Recordings folder (supporting OneDrive backup & user redirection)
+// FOLDERID_Videos: {18989B1D-99A5-45da-BD91-5216B61E79B6}
+static const GUID GUID_FOLDERID_Videos = 
+    { 0x18989b1d, 0x99a5, 0x45da, { 0xbd, 0x91, 0x52, 0x16, 0xb6, 0x1e, 0x79, 0xb6 } };
+
+static BOOL GetRecordingsFolder(WCHAR* outPath, DWORD maxLen) {
+    PWSTR pKnownVideos = NULL;
+    if (SUCCEEDED(SHGetKnownFolderPath(GUID_FOLDERID_Videos, 0, NULL, &pKnownVideos)) && pKnownVideos) {
+        swprintf(outPath, maxLen, L"%ls\\Screen Recordings", pKnownVideos);
+        CoTaskMemFree(pKnownVideos);
+        if (GetFileAttributesW(outPath) == INVALID_FILE_ATTRIBUTES) {
+            CreateDirectoryW(outPath, NULL);
+        }
+        return TRUE;
+    }
+    WCHAR userProfile[MAX_PATH];
+    if (GetEnvironmentVariableW(L"USERPROFILE", userProfile, MAX_PATH)) {
+        swprintf(outPath, maxLen, L"%ls\\Videos\\Screen Recordings", userProfile);
+        if (GetFileAttributesW(outPath) == INVALID_FILE_ATTRIBUTES) {
+            CreateDirectoryW(outPath, NULL);
+        }
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static void UpdateTrayTooltip();
+
 static void LocateIniPath() {
     WCHAR selfDir[MAX_PATH];
     GetModuleFileNameW(NULL, selfDir, MAX_PATH);
@@ -353,11 +383,11 @@ static BOOL CopyFileToClipboard(const WCHAR* filePath) {
 }
 
 static void AutoCopyLatestRecordingToClipboard(HWND hWnd) {
-    WCHAR userProfile[MAX_PATH];
-    if (!GetEnvironmentVariableW(L"USERPROFILE", userProfile, MAX_PATH)) return;
+    WCHAR recDir[MAX_PATH];
+    if (!GetRecordingsFolder(recDir, MAX_PATH)) return;
 
     WCHAR searchPath[MAX_PATH];
-    swprintf(searchPath, MAX_PATH, L"%ls\\Videos\\Screen Recordings\\*.mp4", userProfile);
+    swprintf(searchPath, MAX_PATH, L"%ls\\*.mp4", recDir);
 
     WIN32_FIND_DATAW wfd;
     HANDLE hFind = FindFirstFileW(searchPath, &wfd);
@@ -365,12 +395,12 @@ static void AutoCopyLatestRecordingToClipboard(HWND hWnd) {
 
     FILETIME latestTime = wfd.ftLastWriteTime;
     WCHAR latestFile[MAX_PATH];
-    swprintf(latestFile, MAX_PATH, L"%ls\\Videos\\Screen Recordings\\%ls", userProfile, wfd.cFileName);
+    swprintf(latestFile, MAX_PATH, L"%ls\\%ls", recDir, wfd.cFileName);
 
     while (FindNextFileW(hFind, &wfd)) {
         if (CompareFileTime(&wfd.ftLastWriteTime, &latestTime) > 0) {
             latestTime = wfd.ftLastWriteTime;
-            swprintf(latestFile, MAX_PATH, L"%ls\\Videos\\Screen Recordings\\%ls", userProfile, wfd.cFileName);
+            swprintf(latestFile, MAX_PATH, L"%ls\\%ls", recDir, wfd.cFileName);
         }
     }
     FindClose(hFind);
@@ -382,7 +412,14 @@ static void AutoCopyLatestRecordingToClipboard(HWND hWnd) {
     uFile.LowPart = latestTime.dwLowDateTime; uFile.HighPart = latestTime.dwHighDateTime;
     ULONGLONG diffSec = (uNow.QuadPart > uFile.QuadPart) ? ((uNow.QuadPart - uFile.QuadPart) / 10000000ULL) : 0;
 
+    static WCHAR s_lastCopiedFile[MAX_PATH] = { 0 };
+    static ULONGLONG s_lastCopiedTime = 0;
+
     if (diffSec <= 90) {
+        if (_wcsicmp(s_lastCopiedFile, latestFile) == 0 && s_lastCopiedTime == uFile.QuadPart) {
+            return; // File was already copied to clipboard
+        }
+
         // Ensure file write has finished and file lock is released
         BOOL fileReady = FALSE;
         for (int retries = 0; retries < 8; retries++) {
@@ -397,15 +434,17 @@ static void AutoCopyLatestRecordingToClipboard(HWND hWnd) {
         if (!fileReady) return;
 
         if (CopyFileToClipboard(latestFile)) {
-            ZeroMemory(&g_nid, sizeof(g_nid));
-            g_nid.cbSize = sizeof(g_nid);
-            g_nid.hWnd = hWnd;
-            g_nid.uID = ID_TRAY_APP_ICON;
-            g_nid.uFlags = NIF_INFO;
-            swprintf(g_nid.szInfoTitle, 64, L"High Snipping Frames");
-            swprintf(g_nid.szInfo, 256, L"Recording copied to clipboard!\nReady to paste (Ctrl+V) directly into Discord or Slack.");
-            g_nid.dwInfoFlags = NIIF_INFO;
-            Shell_NotifyIconW(NIM_MODIFY, &g_nid);
+            wcscpy(s_lastCopiedFile, latestFile);
+            s_lastCopiedTime = uFile.QuadPart;
+
+            NOTIFYICONDATAW nid = { sizeof(nid) };
+            nid.hWnd = hWnd;
+            nid.uID = ID_TRAY_APP_ICON;
+            nid.uFlags = NIF_INFO;
+            swprintf(nid.szInfoTitle, 64, L"High Snipping Frames");
+            swprintf(nid.szInfo, 256, L"Recording copied to clipboard!\nReady to paste (Ctrl+V) directly into Discord or Slack.");
+            nid.dwInfoFlags = NIIF_INFO;
+            Shell_NotifyIconW(NIM_MODIFY, &nid);
         }
     }
 }
@@ -597,12 +636,7 @@ static void SaveSettings() {
     g_LastSavedTick = GetTickCount();
 
     // Update Tray Tooltip
-    if (g_CurrentFPS == 0) {
-        swprintf(g_nid.szTip, 128, L"High Snipping Frames - Auto (High FPS)");
-    } else {
-        swprintf(g_nid.szTip, 128, L"High Snipping Frames - %u FPS", g_CurrentFPS);
-    }
-    Shell_NotifyIconW(NIM_MODIFY, &g_nid);
+    UpdateTrayTooltip();
 }
 
 // Apply window size matching the current zoom factor
@@ -627,12 +661,8 @@ static void ApplyZoomWindowSize(HWND hWnd) {
 static void RunStorageGuardian(HWND hWnd, BOOL manualTrigger) {
     if (!g_EnableStorageGuardian && !manualTrigger) return;
 
-    WCHAR userProfile[MAX_PATH];
-    if (!GetEnvironmentVariableW(L"USERPROFILE", userProfile, MAX_PATH)) return;
-
     WCHAR recDir[MAX_PATH];
-    swprintf(recDir, MAX_PATH, L"%ls\\Videos\\Screen Recordings", userProfile);
-    if (GetFileAttributesW(recDir) == INVALID_FILE_ATTRIBUTES) return;
+    if (!GetRecordingsFolder(recDir, MAX_PATH)) return;
 
     WCHAR searchPath[MAX_PATH];
     swprintf(searchPath, MAX_PATH, L"%ls\\*.mp4", recDir);
@@ -663,6 +693,9 @@ static void RunStorageGuardian(HWND hWnd, BOOL manualTrigger) {
     if (canTransfer) {
         if (GetFileAttributesW(g_TransferFolder) == INVALID_FILE_ATTRIBUTES) {
             SHCreateDirectoryExW(NULL, g_TransferFolder, NULL);
+        }
+        if (GetFileAttributesW(g_TransferFolder) == INVALID_FILE_ATTRIBUTES) {
+            canTransfer = FALSE; // Destination unavailable (e.g. unplugged external drive)
         }
     }
 
@@ -713,28 +746,26 @@ static void RunStorageGuardian(HWND hWnd, BOOL manualTrigger) {
         WCHAR warnMsg[256];
         swprintf(warnMsg, 256, L"Screen Recordings folder is currently %.1f GB (exceeds your %u GB limit).", totalGB, g_MaxFolderSizeGB);
         
-        ZeroMemory(&g_nid, sizeof(g_nid));
-        g_nid.cbSize = sizeof(g_nid);
-        g_nid.hWnd = hWnd;
-        g_nid.uID = ID_TRAY_APP_ICON;
-        g_nid.uFlags = NIF_INFO;
-        swprintf(g_nid.szInfoTitle, 64, L"High Snipping Frames - Storage Warning");
-        wcscpy(g_nid.szInfo, warnMsg);
-        g_nid.dwInfoFlags = NIIF_WARNING;
-        Shell_NotifyIconW(NIM_MODIFY, &g_nid);
+        NOTIFYICONDATAW nid = { sizeof(nid) };
+        nid.hWnd = hWnd;
+        nid.uID = ID_TRAY_APP_ICON;
+        nid.uFlags = NIF_INFO;
+        swprintf(nid.szInfoTitle, 64, L"High Snipping Frames - Storage Warning");
+        wcscpy(nid.szInfo, warnMsg);
+        nid.dwInfoFlags = NIIF_WARNING;
+        Shell_NotifyIconW(NIM_MODIFY, &nid);
     } else if (transferredCount > 0 || cleanedCount > 0) {
         WCHAR summaryMsg[256];
         swprintf(summaryMsg, 256, L"Transferred %u recording(s) and cleaned %u old file(s).", transferredCount, cleanedCount);
         
-        ZeroMemory(&g_nid, sizeof(g_nid));
-        g_nid.cbSize = sizeof(g_nid);
-        g_nid.hWnd = hWnd;
-        g_nid.uID = ID_TRAY_APP_ICON;
-        g_nid.uFlags = NIF_INFO;
-        swprintf(g_nid.szInfoTitle, 64, L"High Snipping Frames - Storage Guardian");
-        wcscpy(g_nid.szInfo, summaryMsg);
-        g_nid.dwInfoFlags = NIIF_INFO;
-        Shell_NotifyIconW(NIM_MODIFY, &g_nid);
+        NOTIFYICONDATAW nid = { sizeof(nid) };
+        nid.hWnd = hWnd;
+        nid.uID = ID_TRAY_APP_ICON;
+        nid.uFlags = NIF_INFO;
+        swprintf(nid.szInfoTitle, 64, L"High Snipping Frames - Storage Guardian");
+        wcscpy(nid.szInfo, summaryMsg);
+        nid.dwInfoFlags = NIIF_INFO;
+        Shell_NotifyIconW(NIM_MODIFY, &nid);
     }
 
     if (manualTrigger) {
@@ -757,11 +788,7 @@ static void RunStorageGuardian(HWND hWnd, BOOL manualTrigger) {
 // Open Snipping Tool Recordings folder in Explorer
 static void OpenRecordingsFolder() {
     WCHAR path[MAX_PATH];
-    if (GetEnvironmentVariableW(L"USERPROFILE", path, MAX_PATH)) {
-        wcscat(path, L"\\Videos\\Screen Recordings");
-        if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) {
-            CreateDirectoryW(path, NULL);
-        }
+    if (GetRecordingsFolder(path, MAX_PATH)) {
         ShellExecuteW(NULL, L"open", path, NULL, NULL, SW_SHOWNORMAL);
     }
 }
@@ -796,28 +823,28 @@ static void LaunchSnippingTool() {
 
 // Run ffprobe on the latest recording and display message
 static void AnalyzeLatestRecording(HWND hWnd) {
-    WCHAR userProfile[MAX_PATH];
-    GetEnvironmentVariableW(L"USERPROFILE", userProfile, MAX_PATH);
+    WCHAR recDir[MAX_PATH];
+    if (!GetRecordingsFolder(recDir, MAX_PATH)) return;
 
     WCHAR searchPath[MAX_PATH];
-    swprintf(searchPath, MAX_PATH, L"%ls\\Videos\\Screen Recordings\\*.mp4", userProfile);
+    swprintf(searchPath, MAX_PATH, L"%ls\\*.mp4", recDir);
 
     WIN32_FIND_DATAW wfd;
     HANDLE hFind = FindFirstFileW(searchPath, &wfd);
     if (hFind == INVALID_HANDLE_VALUE) {
-        MessageBoxW(hWnd, L"No recordings found in Videos\\Screen Recordings.\nRecord a video with Snipping Tool first!",
+        MessageBoxW(hWnd, L"No recordings found in Screen Recordings.\nRecord a video with Snipping Tool first!",
                     L"High Snipping Frames", MB_ICONINFORMATION);
         return;
     }
 
     FILETIME latestTime = wfd.ftLastWriteTime;
     WCHAR latestFile[MAX_PATH];
-    swprintf(latestFile, MAX_PATH, L"%ls\\Videos\\Screen Recordings\\%ls", userProfile, wfd.cFileName);
+    swprintf(latestFile, MAX_PATH, L"%ls\\%ls", recDir, wfd.cFileName);
 
     while (FindNextFileW(hFind, &wfd)) {
         if (CompareFileTime(&wfd.ftLastWriteTime, &latestTime) > 0) {
             latestTime = wfd.ftLastWriteTime;
-            swprintf(latestFile, MAX_PATH, L"%ls\\Videos\\Screen Recordings\\%ls", userProfile, wfd.cFileName);
+            swprintf(latestFile, MAX_PATH, L"%ls\\%ls", recDir, wfd.cFileName);
         }
     }
     FindClose(hFind);
@@ -849,7 +876,12 @@ static void AnalyzeLatestRecording(HWND hWnd) {
     } else {
         CloseHandle(hWrite);
         CloseHandle(hRead);
-        MessageBoxW(hWnd, L"Could not execute ffprobe. Make sure ffprobe is available.", L"Analysis", MB_ICONWARNING);
+        MessageBoxW(hWnd,
+            L"ffprobe.exe was not found in your system PATH.\n\n"
+            L"To enable instant video framerate verification:\n"
+            L"1. Run 'winget install Gyan.FFmpeg' in PowerShell, or\n"
+            L"2. Place ffprobe.exe in the same folder as this application.",
+            L"High Snipping Frames - Video Verification", MB_ICONINFORMATION);
         return;
     }
 
@@ -1275,6 +1307,10 @@ static void InitDarkMode() {
 }
 
 static void UpdateTrayTooltip() {
+    g_nid.cbSize = sizeof(g_nid);
+    g_nid.hWnd = g_hWndMain;
+    g_nid.uID = ID_TRAY_APP_ICON;
+    g_nid.uFlags = NIF_TIP;
     if (g_CurrentFPS == 0) {
         swprintf(g_nid.szTip, 128, L"High Snipping Frames - Auto (High FPS)");
     } else {
@@ -1325,7 +1361,11 @@ static void ShowTrayMenu(HWND hWnd) {
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
 
     // 3. Quick Actions
-    AppendMenuW(hMenu, MF_STRING, IDM_RECORD,  L"Record Screen (Win + Alt + R)");
+    if (g_bHotkeyRegistered) {
+        AppendMenuW(hMenu, MF_STRING, IDM_RECORD,  L"Record Screen (Win + Alt + R)");
+    } else {
+        AppendMenuW(hMenu, MF_STRING, IDM_RECORD,  L"Record Screen (Win + Alt + R taken)");
+    }
     AppendMenuW(hMenu, MF_STRING, IDM_FOLDER,  L"Open Recordings Folder");
     AppendMenuW(hMenu, MF_STRING, IDM_ANALYZE, L"Verify Latest Video");
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
@@ -1351,6 +1391,16 @@ static void ShowTrayMenu(HWND hWnd) {
 
 // Window Procedure
 static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (msg != 0 && msg == g_uMsgTaskbarCreated) {
+        g_nid.cbSize = sizeof(g_nid);
+        g_nid.hWnd = hWnd;
+        g_nid.uID = ID_TRAY_APP_ICON;
+        g_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+        g_nid.uCallbackMessage = WM_TRAYICON;
+        Shell_NotifyIconW(NIM_ADD, &g_nid);
+        return 0;
+    }
+
     switch (msg) {
         case WM_CREATE: {
             // Apply Windows 11 Dark Mode & Rounded Corners
@@ -1634,6 +1684,22 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 }
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow) {
+    // Enable modern Per-Monitor V2 DPI awareness for crisp scaling across mixed displays
+    HMODULE hUser32 = GetModuleHandleW(L"user32.dll");
+    if (hUser32) {
+        typedef BOOL (WINAPI *fnSetProcessDpiAwarenessContext)(DPI_AWARENESS_CONTEXT);
+        fnSetProcessDpiAwarenessContext pSetDpi = 
+            (fnSetProcessDpiAwarenessContext)GetProcAddress(hUser32, "SetProcessDpiAwarenessContext");
+        if (pSetDpi) {
+            pSetDpi(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        } else {
+            typedef BOOL (WINAPI *fnSetProcessDPIAware)();
+            fnSetProcessDPIAware pSetDpiLegacy = (fnSetProcessDPIAware)GetProcAddress(hUser32, "SetProcessDPIAware");
+            if (pSetDpiLegacy) pSetDpiLegacy();
+        }
+    }
+
+    g_uMsgTaskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
     InitDarkMode();
     g_hInstance = hInstance;
 
@@ -1707,7 +1773,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
 
     // Register Global Instant Video Hotkey (Win + Alt + R)
     if (g_EnableGlobalHotkey && g_hWndMain) {
-        RegisterHotKey(g_hWndMain, HOTKEY_RECORD_VIDEO, MOD_WIN | MOD_ALT | MOD_NOREPEAT, 'R');
+        g_bHotkeyRegistered = RegisterHotKey(g_hWndMain, HOTKEY_RECORD_VIDEO, MOD_WIN | MOD_ALT | MOD_NOREPEAT, 'R');
+        if (!g_bHotkeyRegistered) {
+            g_bHotkeyRegistered = RegisterHotKey(g_hWndMain, HOTKEY_RECORD_VIDEO, MOD_WIN | MOD_ALT, 'R');
+        }
     }
 
     // Start the unified background injection watcher thread

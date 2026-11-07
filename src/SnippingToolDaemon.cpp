@@ -105,7 +105,20 @@ static BOOL InjectDLL(DWORD pid, const WCHAR* dllPath) {
     return (exitCode != 0 && exitCode != 0xC0000409);
 }
 
+static DWORD  g_InjectedPID = 0;
+static HANDLE g_hInjectedProc = NULL;
+
 static void ScanAndInject(const WCHAR* dllPath) {
+    if (g_hInjectedProc != NULL) {
+        DWORD waitRes = WaitForSingleObject(g_hInjectedProc, 0);
+        if (waitRes == WAIT_TIMEOUT) {
+            return; // Already attached and alive; zero polling CPU!
+        }
+        CloseHandle(g_hInjectedProc);
+        g_hInjectedProc = NULL;
+        g_InjectedPID = 0;
+    }
+
     HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (hSnap == INVALID_HANDLE_VALUE) return;
 
@@ -119,7 +132,14 @@ static void ScanAndInject(const WCHAR* dllPath) {
                     Log("[SnippingToolDaemon] Detected SnippingTool.exe (PID %u) without HighFPS mod. Injecting...", pe.th32ProcessID);
                     if (InjectDLL(pe.th32ProcessID, dllPath)) {
                         Log("[SnippingToolDaemon] Injected HighFPS mod successfully into PID %u", pe.th32ProcessID);
+                        g_InjectedPID = pe.th32ProcessID;
+                        g_hInjectedProc = OpenProcess(SYNCHRONIZE, FALSE, pe.th32ProcessID);
+                        break;
                     }
+                } else {
+                    g_InjectedPID = pe.th32ProcessID;
+                    g_hInjectedProc = OpenProcess(SYNCHRONIZE, FALSE, pe.th32ProcessID);
+                    break;
                 }
             }
         } while (Process32NextW(hSnap, &pe));
@@ -156,7 +176,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
 
     while (TRUE) {
         ScanAndInject(dllPath);
-        Sleep(250);
+        DWORD sleepMs = (g_hInjectedProc != NULL) ? 1200 : 800;
+        Sleep(sleepMs);
     }
 
     if (hMutex) CloseHandle(hMutex);
