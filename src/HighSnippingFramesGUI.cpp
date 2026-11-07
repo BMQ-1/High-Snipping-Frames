@@ -113,7 +113,7 @@ static void LocateIniPath() {
     WCHAR* pSlash = wcsrchr(selfDir, L'\\');
     if (pSlash) *pSlash = L'\0';
 
-    swprintf(g_IniPath, MAX_PATH, L"%s\\SnippingToolHighFPS.ini", selfDir);
+    swprintf(g_IniPath, MAX_PATH, L"%ls\\SnippingToolHighFPS.ini", selfDir);
     if (GetFileAttributesW(g_IniPath) == INVALID_FILE_ATTRIBUTES) {
         wcscpy(g_IniPath, L"C:\\Program Files\\SnippingToolHighFPS\\SnippingToolHighFPS.ini");
     }
@@ -225,7 +225,7 @@ static BOOL FindInstalledSnippingToolPath(WCHAR* outPath, DWORD maxLen) {
     WIN32_FIND_DATAW wfd;
     HANDLE hFind = FindFirstFileW(searchPath, &wfd);
     if (hFind != INVALID_HANDLE_VALUE) {
-        swprintf(outPath, maxLen, L"C:\\Program Files\\WindowsApps\\%s\\SnippingTool\\SnippingTool.exe", wfd.cFileName);
+        swprintf(outPath, maxLen, L"C:\\Program Files\\WindowsApps\\%ls\\SnippingTool\\SnippingTool.exe", wfd.cFileName);
         FindClose(hFind);
         if (GetFileAttributesW(outPath) != INVALID_FILE_ATTRIBUTES) {
             return TRUE;
@@ -234,7 +234,7 @@ static BOOL FindInstalledSnippingToolPath(WCHAR* outPath, DWORD maxLen) {
 
     WCHAR localApp[MAX_PATH];
     if (GetEnvironmentVariableW(L"LOCALAPPDATA", localApp, MAX_PATH)) {
-        swprintf(outPath, maxLen, L"%s\\Microsoft\\WindowsApps\\SnippingTool.exe", localApp);
+        swprintf(outPath, maxLen, L"%ls\\Microsoft\\WindowsApps\\SnippingTool.exe", localApp);
         if (GetFileAttributesW(outPath) != INVALID_FILE_ATTRIBUTES) {
             return TRUE;
         }
@@ -282,7 +282,7 @@ static void SetAutoStart(BOOL enable) {
             WCHAR selfExe[MAX_PATH];
             GetModuleFileNameW(NULL, selfExe, MAX_PATH);
             WCHAR guiPath[MAX_PATH + 32];
-            swprintf(guiPath, MAX_PATH + 32, L"\"%s\" --minimized", selfExe);
+            swprintf(guiPath, MAX_PATH + 32, L"\"%ls\" --minimized", selfExe);
             RegSetValueExW(hKey, L"HighSnippingFrames", 0, REG_SZ, (const BYTE*)guiPath, (DWORD)(wcslen(guiPath) + 1) * sizeof(WCHAR));
         } else {
             RegDeleteValueW(hKey, L"HighSnippingFrames");
@@ -306,7 +306,7 @@ static void LocateDllPath(WCHAR* outPath) {
     WCHAR* pSlash = wcsrchr(selfDir, L'\\');
     if (pSlash) *pSlash = L'\0';
 
-    swprintf(outPath, MAX_PATH, L"%s\\SnippingToolHighFPS.dll", selfDir);
+    swprintf(outPath, MAX_PATH, L"%ls\\SnippingToolHighFPS.dll", selfDir);
     if (GetFileAttributesW(outPath) == INVALID_FILE_ATTRIBUTES) {
         wcscpy(outPath, L"C:\\Program Files\\SnippingToolHighFPS\\SnippingToolHighFPS.dll");
     }
@@ -357,7 +357,7 @@ static void AutoCopyLatestRecordingToClipboard(HWND hWnd) {
     if (!GetEnvironmentVariableW(L"USERPROFILE", userProfile, MAX_PATH)) return;
 
     WCHAR searchPath[MAX_PATH];
-    swprintf(searchPath, MAX_PATH, L"%s\\Videos\\Screen Recordings\\*.mp4", userProfile);
+    swprintf(searchPath, MAX_PATH, L"%ls\\Videos\\Screen Recordings\\*.mp4", userProfile);
 
     WIN32_FIND_DATAW wfd;
     HANDLE hFind = FindFirstFileW(searchPath, &wfd);
@@ -365,12 +365,12 @@ static void AutoCopyLatestRecordingToClipboard(HWND hWnd) {
 
     FILETIME latestTime = wfd.ftLastWriteTime;
     WCHAR latestFile[MAX_PATH];
-    swprintf(latestFile, MAX_PATH, L"%s\\Videos\\Screen Recordings\\%s", userProfile, wfd.cFileName);
+    swprintf(latestFile, MAX_PATH, L"%ls\\Videos\\Screen Recordings\\%ls", userProfile, wfd.cFileName);
 
     while (FindNextFileW(hFind, &wfd)) {
         if (CompareFileTime(&wfd.ftLastWriteTime, &latestTime) > 0) {
             latestTime = wfd.ftLastWriteTime;
-            swprintf(latestFile, MAX_PATH, L"%s\\Videos\\Screen Recordings\\%s", userProfile, wfd.cFileName);
+            swprintf(latestFile, MAX_PATH, L"%ls\\Videos\\Screen Recordings\\%ls", userProfile, wfd.cFileName);
         }
     }
     FindClose(hFind);
@@ -631,11 +631,11 @@ static void RunStorageGuardian(HWND hWnd, BOOL manualTrigger) {
     if (!GetEnvironmentVariableW(L"USERPROFILE", userProfile, MAX_PATH)) return;
 
     WCHAR recDir[MAX_PATH];
-    swprintf(recDir, MAX_PATH, L"%s\\Videos\\Screen Recordings", userProfile);
+    swprintf(recDir, MAX_PATH, L"%ls\\Videos\\Screen Recordings", userProfile);
     if (GetFileAttributesW(recDir) == INVALID_FILE_ATTRIBUTES) return;
 
     WCHAR searchPath[MAX_PATH];
-    swprintf(searchPath, MAX_PATH, L"%s\\*.mp4", recDir);
+    swprintf(searchPath, MAX_PATH, L"%ls\\*.mp4", recDir);
 
     WIN32_FIND_DATAW wfd;
     HANDLE hFind = FindFirstFileW(searchPath, &wfd);
@@ -683,12 +683,12 @@ static void RunStorageGuardian(HWND hWnd, BOOL manualTrigger) {
         DWORD ageDays = (DWORD)(diff100ns / (10000000ULL * 3600 * 24));
 
         WCHAR srcFile[MAX_PATH];
-        swprintf(srcFile, MAX_PATH, L"%s\\%s", recDir, wfd.cFileName);
+        swprintf(srcFile, MAX_PATH, L"%ls\\%ls", recDir, wfd.cFileName);
 
         // 1. Transfer to Folder X if age >= TransferDays
         if (canTransfer && ageDays >= g_TransferDays) {
             WCHAR dstFile[MAX_PATH];
-            swprintf(dstFile, MAX_PATH, L"%s\\%s", g_TransferFolder, wfd.cFileName);
+            swprintf(dstFile, MAX_PATH, L"%ls\\%ls", g_TransferFolder, wfd.cFileName);
             if (MoveFileExW(srcFile, dstFile, MOVEFILE_COPY_ALLOWED | MOVEFILE_REPLACE_EXISTING)) {
                 transferredCount++;
                 totalBytes -= uSize.QuadPart;
@@ -776,7 +776,7 @@ static void LaunchSnippingTool() {
     WCHAR localApp[MAX_PATH];
     if (GetEnvironmentVariableW(L"LOCALAPPDATA", localApp, MAX_PATH)) {
         WCHAR aliasPath[MAX_PATH];
-        swprintf(aliasPath, MAX_PATH, L"%s\\Microsoft\\WindowsApps\\SnippingTool.exe", localApp);
+        swprintf(aliasPath, MAX_PATH, L"%ls\\Microsoft\\WindowsApps\\SnippingTool.exe", localApp);
         if (GetFileAttributesW(aliasPath) != INVALID_FILE_ATTRIBUTES) {
             hInst = ShellExecuteW(NULL, L"open", aliasPath, NULL, NULL, SW_SHOWNORMAL);
             if ((INT_PTR)hInst > 32) return;
@@ -800,7 +800,7 @@ static void AnalyzeLatestRecording(HWND hWnd) {
     GetEnvironmentVariableW(L"USERPROFILE", userProfile, MAX_PATH);
 
     WCHAR searchPath[MAX_PATH];
-    swprintf(searchPath, MAX_PATH, L"%s\\Videos\\Screen Recordings\\*.mp4", userProfile);
+    swprintf(searchPath, MAX_PATH, L"%ls\\Videos\\Screen Recordings\\*.mp4", userProfile);
 
     WIN32_FIND_DATAW wfd;
     HANDLE hFind = FindFirstFileW(searchPath, &wfd);
@@ -812,18 +812,18 @@ static void AnalyzeLatestRecording(HWND hWnd) {
 
     FILETIME latestTime = wfd.ftLastWriteTime;
     WCHAR latestFile[MAX_PATH];
-    swprintf(latestFile, MAX_PATH, L"%s\\Videos\\Screen Recordings\\%s", userProfile, wfd.cFileName);
+    swprintf(latestFile, MAX_PATH, L"%ls\\Videos\\Screen Recordings\\%ls", userProfile, wfd.cFileName);
 
     while (FindNextFileW(hFind, &wfd)) {
         if (CompareFileTime(&wfd.ftLastWriteTime, &latestTime) > 0) {
             latestTime = wfd.ftLastWriteTime;
-            swprintf(latestFile, MAX_PATH, L"%s\\Videos\\Screen Recordings\\%s", userProfile, wfd.cFileName);
+            swprintf(latestFile, MAX_PATH, L"%ls\\Videos\\Screen Recordings\\%ls", userProfile, wfd.cFileName);
         }
     }
     FindClose(hFind);
 
     WCHAR cmd[1024];
-    swprintf(cmd, 1024, L"ffprobe.exe -v error -select_streams v:0 -show_entries stream=r_frame_rate,avg_frame_rate,nb_frames,duration,width,height -of default=noprint_wrappers=1:nokey=0 \"%s\"", latestFile);
+    swprintf(cmd, 1024, L"ffprobe.exe -v error -select_streams v:0 -show_entries stream=r_frame_rate,avg_frame_rate,nb_frames,duration,width,height -of default=noprint_wrappers=1:nokey=0 \"%ls\"", latestFile);
 
     SECURITY_ATTRIBUTES sa = { sizeof(sa), NULL, TRUE };
     HANDLE hRead, hWrite;
@@ -855,7 +855,7 @@ static void AnalyzeLatestRecording(HWND hWnd) {
 
     WCHAR msg[4096];
     WCHAR* pShortName = wcsrchr(latestFile, L'\\');
-    swprintf(msg, 4096, L"Latest Video:\n%s\n\nVerified Stream Analysis:\n%hs",
+    swprintf(msg, 4096, L"Latest Video:\n%ls\n\nVerified Stream Analysis:\n%hs",
              (pShortName ? pShortName + 1 : latestFile), buffer);
     MessageBoxW(hWnd, msg, L"High Snipping Frames - Video Verification", MB_ICONINFORMATION);
 }
@@ -1006,7 +1006,7 @@ static void RenderUI(Graphics& g, int clientWidth, int clientHeight) {
 
     RectF rcHeroRight(BASE_WIDTH - 210.0f, 80.0f, 180.0f, 64.0f);
     WCHAR sysInfo[128];
-    swprintf(sysInfo, 128, L"Display: %u Hz\nEngine: Active (Unified)\nSnipping Tool: %s",
+    swprintf(sysInfo, 128, L"Display: %u Hz\nEngine: Active (Unified)\nSnipping Tool: %ls",
              maxRefresh,
              (snipPid != 0 ? L"Hooked & Ready" : L"Idle"));
     g.DrawString(sysInfo, -1, &fontSmall, rcHeroRight, &sfLeft, &brTextDim);

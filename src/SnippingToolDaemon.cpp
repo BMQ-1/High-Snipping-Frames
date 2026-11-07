@@ -130,7 +130,7 @@ static void ScanAndInject(const WCHAR* dllPath) {
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow) {
     WCHAR tempPath[MAX_PATH];
     if (GetTempPathW(MAX_PATH, tempPath)) {
-        swprintf(g_LogPath, MAX_PATH, L"%sSnippingToolDaemon.log", tempPath);
+        swprintf(g_LogPath, MAX_PATH, L"%lsSnippingToolDaemon.log", tempPath);
     }
 
     HANDLE hMutex = CreateMutexW(NULL, TRUE, L"Local\\SnippingToolHighFPSDaemonMutex_v1");
@@ -147,7 +147,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     if (pSlash) *pSlash = L'\0';
 
     WCHAR dllPath[MAX_PATH];
-    swprintf(dllPath, MAX_PATH, L"%s\\SnippingToolHighFPS.dll", selfDir);
+    swprintf(dllPath, MAX_PATH, L"%ls\\SnippingToolHighFPS.dll", selfDir);
     if (GetFileAttributesW(dllPath) == INVALID_FILE_ATTRIBUTES) {
         wcscpy(dllPath, L"C:\\Program Files\\SnippingToolHighFPS\\SnippingToolHighFPS.dll");
     }

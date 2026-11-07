@@ -12,7 +12,7 @@ static BOOL FindInstalledSnippingToolPath(WCHAR* outPath, DWORD maxLen) {
     WIN32_FIND_DATAW wfd;
     HANDLE hFind = FindFirstFileW(searchPath, &wfd);
     if (hFind != INVALID_HANDLE_VALUE) {
-        swprintf(outPath, maxLen, L"C:\\Program Files\\WindowsApps\\%s\\SnippingTool\\SnippingTool.exe", wfd.cFileName);
+        swprintf(outPath, maxLen, L"C:\\Program Files\\WindowsApps\\%ls\\SnippingTool\\SnippingTool.exe", wfd.cFileName);
         FindClose(hFind);
         if (GetFileAttributesW(outPath) != INVALID_FILE_ATTRIBUTES) {
             return TRUE;
@@ -21,7 +21,7 @@ static BOOL FindInstalledSnippingToolPath(WCHAR* outPath, DWORD maxLen) {
 
     WCHAR localApp[MAX_PATH];
     if (GetEnvironmentVariableW(L"LOCALAPPDATA", localApp, MAX_PATH)) {
-        swprintf(outPath, maxLen, L"%s\\Microsoft\\WindowsApps\\SnippingTool.exe", localApp);
+        swprintf(outPath, maxLen, L"%ls\\Microsoft\\WindowsApps\\SnippingTool.exe", localApp);
         if (GetFileAttributesW(outPath) != INVALID_FILE_ATTRIBUTES) {
             return TRUE;
         }
@@ -103,7 +103,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     if (pSlash) *pSlash = L'\0';
 
     WCHAR dllPath[MAX_PATH];
-    swprintf(dllPath, MAX_PATH, L"%s\\SnippingToolHighFPS.dll", selfDir);
+    swprintf(dllPath, MAX_PATH, L"%ls\\SnippingToolHighFPS.dll", selfDir);
     if (GetFileAttributesW(dllPath) == INVALID_FILE_ATTRIBUTES) {
         wcscpy(dllPath, L"C:\\Program Files\\SnippingToolHighFPS\\SnippingToolHighFPS.dll");
     }
@@ -139,7 +139,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         // Standalone mode: started directly
         WCHAR installedExe[MAX_PATH];
         if (FindInstalledSnippingToolPath(installedExe, MAX_PATH)) {
-            swprintf(targetCmdLine, 4096, L"\"%s\"", installedExe);
+            swprintf(targetCmdLine, 4096, L"\"%ls\"", installedExe);
         } else {
             MessageBoxW(NULL, L"Could not locate Windows Snipping Tool installation.",
                         L"Snipping Tool High FPS", MB_ICONERROR);

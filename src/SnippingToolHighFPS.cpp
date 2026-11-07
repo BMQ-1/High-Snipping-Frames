@@ -402,7 +402,7 @@ static void LoadConfig(HMODULE hMod) {
         } else {
             WCHAR tempPath[MAX_PATH];
             if (GetTempPathW(MAX_PATH, tempPath)) {
-                swprintf(g_LogPath, MAX_PATH, L"%sSnippingToolHighFPS.log", tempPath);
+                swprintf(g_LogPath, MAX_PATH, L"%lsSnippingToolHighFPS.log", tempPath);
             }
         }
     }
