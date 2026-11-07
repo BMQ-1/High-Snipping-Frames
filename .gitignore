@@ -1,16 +1,44 @@
-# Build artifacts & logs
-*.log
-*.obj
+# ===============================================================
+# High Snipping Frames - Git Ignore Configuration
+# ===============================================================
+
+# Compiler intermediate outputs & debug artifacts
 *.o
-*.bak
+*.obj
+*.res
+*.pdb
+*.ilk
+*.exp
+*.d
+*.dmp
 
-# Temporary files
+# Build, packaging & logs
+*.log
 *.tmp
+*.bak
+*.orig
 dist/
-.vscode/
-.idea/
+staging/
+_stage/
 
+# Documentation / Research staging (kept local)
 docs/
 
-*.res
+# Python cache & utilities
+__pycache__/
+*.pyc
+*.pyo
 
+# IDE & Editor files
+.vscode/
+.idea/
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Windows OS generated files
+[Dd]esktop.ini
+[Tt]humbs.db
+$RECYCLE.BIN/

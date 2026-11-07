@@ -35,6 +35,7 @@ using namespace Gdiplus;
 #define IDM_RESTART_SVC   3023
 #define IDM_RESET_ZOOM    3024
 #define IDM_STORAGE_CHECK 3026
+#define IDM_REPAIR        3027
 #define IDM_EXIT          3025
 
 #define HOTKEY_RECORD_VIDEO 2001
@@ -90,6 +91,7 @@ static BOOL  g_AutoCopyToClipboard     = TRUE;      // Automatically put fresh M
 #define HIT_ZOOM_MINUS     7
 #define HIT_ZOOM_PLUS      8
 #define HIT_ZOOM_RESET     9
+#define HIT_ALERT_REPAIR   10
 
 static int g_HoveredHitId = HIT_NONE;
 static int g_HoveredData = -1;
@@ -117,6 +119,19 @@ static void LocateIniPath() {
     }
 }
 
+// Normalize fractional display refresh rates (e.g. 59.94Hz -> 60Hz, 143.98Hz -> 144Hz)
+static UINT32 NormalizeRefreshRate(UINT32 hz) {
+    if (hz >= 58 && hz <= 62) return 60;
+    if (hz >= 73 && hz <= 77) return 75;
+    if (hz >= 88 && hz <= 92) return 90;
+    if (hz >= 118 && hz <= 122) return 120;
+    if (hz >= 142 && hz <= 146) return 144;
+    if (hz >= 163 && hz <= 167) return 165;
+    if (hz >= 238 && hz <= 242) return 240;
+    if (hz >= 358 && hz <= 362) return 360;
+    return hz;
+}
+
 // Helper: Detect highest active refresh rate
 static UINT32 GetMaxDisplayRefresh() {
     UINT32 maxFreq = 60;
@@ -135,7 +150,96 @@ static UINT32 GetMaxDisplayRefresh() {
             }
         }
     }
-    return maxFreq;
+    return NormalizeRefreshRate((maxFreq >= 60) ? maxFreq : 144);
+}
+
+// Helper: Detect if a conflicting legacy IFEO hook is registered for SnippingTool.exe
+static BOOL IsLegacyIFEOActive() {
+    HKEY hKey;
+    LSTATUS st = RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\SnippingTool.exe",
+        0, KEY_READ, &hKey);
+    if (st == ERROR_SUCCESS) {
+        WCHAR dbg[MAX_PATH] = { 0 };
+        DWORD len = sizeof(dbg);
+        LSTATUS valSt = RegQueryValueExW(hKey, L"Debugger", NULL, NULL, (LPBYTE)dbg, &len);
+        RegCloseKey(hKey);
+        return (valSt == ERROR_SUCCESS && len > 0);
+    }
+    return FALSE;
+}
+
+// Helper: Remove legacy IFEO Debugger hook (elevated prompt if required)
+static void RepairSnippingToolAssociations(HWND hWnd) {
+    // If we have direct permissions, try silent removal first
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\SnippingTool.exe",
+        0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
+        RegDeleteValueW(hKey, L"Debugger");
+        RegCloseKey(hKey);
+    }
+
+    if (!IsLegacyIFEOActive()) {
+        if (hWnd) {
+            MessageBoxW(hWnd,
+                L"Windows Snipping Tool shortcuts have been successfully repaired!\n\n"
+                L"The conflicting legacy IFEO hook was removed.\n"
+                L"Win + Shift + S and Print Screen will now work normally.",
+                L"High Snipping Frames - Repair", MB_ICONINFORMATION);
+            InvalidateRect(hWnd, NULL, FALSE);
+        }
+        return;
+    }
+
+    // Otherwise launch elevated one-liner
+    LPCWSTR script = L"-ExecutionPolicy Bypass -NoProfile -Command "
+                     L"\"Remove-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\SnippingTool.exe' -Name 'Debugger' -ErrorAction SilentlyContinue; "
+                     L"Remove-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\ScreenClippingHost.exe' -Name 'Debugger' -ErrorAction SilentlyContinue\"";
+
+    HINSTANCE hInst = ShellExecuteW(NULL, L"runas", L"powershell.exe", script, NULL, SW_HIDE);
+    if ((INT_PTR)hInst > 32) {
+        Sleep(1200);
+        if (!IsLegacyIFEOActive()) {
+            if (hWnd) {
+                MessageBoxW(hWnd,
+                    L"Windows Snipping Tool shortcuts have been successfully repaired!\n\n"
+                    L"The conflicting legacy IFEO hook was removed.\n"
+                    L"Win + Shift + S and Print Screen will now work normally.",
+                    L"High Snipping Frames - Repair", MB_ICONINFORMATION);
+            }
+        }
+    } else {
+        if (hWnd) {
+            MessageBoxW(hWnd,
+                L"Administrator privileges are required to clear the legacy IFEO registry entry.",
+                L"High Snipping Frames - Repair", MB_ICONWARNING);
+        }
+    }
+    if (hWnd) InvalidateRect(hWnd, NULL, FALSE);
+}
+
+// Find installed SnippingTool.exe path
+static BOOL FindInstalledSnippingToolPath(WCHAR* outPath, DWORD maxLen) {
+    WCHAR searchPath[MAX_PATH] = L"C:\\Program Files\\WindowsApps\\Microsoft.ScreenSketch_*_x64__8wekyb3d8bbwe";
+    WIN32_FIND_DATAW wfd;
+    HANDLE hFind = FindFirstFileW(searchPath, &wfd);
+    if (hFind != INVALID_HANDLE_VALUE) {
+        swprintf(outPath, maxLen, L"C:\\Program Files\\WindowsApps\\%s\\SnippingTool\\SnippingTool.exe", wfd.cFileName);
+        FindClose(hFind);
+        if (GetFileAttributesW(outPath) != INVALID_FILE_ATTRIBUTES) {
+            return TRUE;
+        }
+    }
+
+    WCHAR localApp[MAX_PATH];
+    if (GetEnvironmentVariableW(L"LOCALAPPDATA", localApp, MAX_PATH)) {
+        swprintf(outPath, maxLen, L"%s\\Microsoft\\WindowsApps\\SnippingTool.exe", localApp);
+        if (GetFileAttributesW(outPath) != INVALID_FILE_ATTRIBUTES) {
+            return TRUE;
+        }
+    }
+    return FALSE;
 }
 
 // Helper: Check if Process is running
@@ -279,6 +383,19 @@ static void AutoCopyLatestRecordingToClipboard(HWND hWnd) {
     ULONGLONG diffSec = (uNow.QuadPart > uFile.QuadPart) ? ((uNow.QuadPart - uFile.QuadPart) / 10000000ULL) : 0;
 
     if (diffSec <= 90) {
+        // Ensure file write has finished and file lock is released
+        BOOL fileReady = FALSE;
+        for (int retries = 0; retries < 8; retries++) {
+            HANDLE hCheck = CreateFileW(latestFile, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+            if (hCheck != INVALID_HANDLE_VALUE) {
+                CloseHandle(hCheck);
+                fileReady = TRUE;
+                break;
+            }
+            Sleep(250);
+        }
+        if (!fileReady) return;
+
         if (CopyFileToClipboard(latestFile)) {
             ZeroMemory(&g_nid, sizeof(g_nid));
             g_nid.cbSize = sizeof(g_nid);
@@ -314,7 +431,13 @@ static BOOL IsModuleLoaded(DWORD pid, const WCHAR* modName) {
 static BOOL InjectDLL(DWORD pid, const WCHAR* dllPath) {
     if (GetFileAttributesW(dllPath) == INVALID_FILE_ATTRIBUTES) return FALSE;
 
-    HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
+    // Use specific AppContainer-friendly rights instead of PROCESS_ALL_ACCESS
+    DWORD accessRights = PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION | 
+                         PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ;
+    HANDLE hProcess = OpenProcess(accessRights, FALSE, pid);
+    if (!hProcess) {
+        hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
+    }
     if (!hProcess) return FALSE;
 
     SIZE_T pathBytes = (wcslen(dllPath) + 1) * sizeof(WCHAR);
@@ -643,9 +766,32 @@ static void OpenRecordingsFolder() {
     }
 }
 
-// Launch Snipping Tool for recording
+// Launch Snipping Tool for recording with cascading fallbacks
 static void LaunchSnippingTool() {
-    ShellExecuteW(NULL, L"open", L"snippingtool.exe", NULL, NULL, SW_SHOWNORMAL);
+    // 1. Try launching through default Windows App Execution Alias
+    HINSTANCE hInst = ShellExecuteW(NULL, L"open", L"snippingtool.exe", NULL, NULL, SW_SHOWNORMAL);
+    if ((INT_PTR)hInst > 32) return;
+
+    // 2. Try AppExecutionAlias direct path
+    WCHAR localApp[MAX_PATH];
+    if (GetEnvironmentVariableW(L"LOCALAPPDATA", localApp, MAX_PATH)) {
+        WCHAR aliasPath[MAX_PATH];
+        swprintf(aliasPath, MAX_PATH, L"%s\\Microsoft\\WindowsApps\\SnippingTool.exe", localApp);
+        if (GetFileAttributesW(aliasPath) != INVALID_FILE_ATTRIBUTES) {
+            hInst = ShellExecuteW(NULL, L"open", aliasPath, NULL, NULL, SW_SHOWNORMAL);
+            if ((INT_PTR)hInst > 32) return;
+        }
+    }
+
+    // 3. Try installed package executable in WindowsApps
+    WCHAR installedExe[MAX_PATH];
+    if (FindInstalledSnippingToolPath(installedExe, MAX_PATH)) {
+        hInst = ShellExecuteW(NULL, L"open", installedExe, NULL, NULL, SW_SHOWNORMAL);
+        if ((INT_PTR)hInst > 32) return;
+    }
+
+    // 4. Fallback to protocol activation
+    ShellExecuteW(NULL, L"open", L"ms-screenclip:", NULL, NULL, SW_SHOWNORMAL);
 }
 
 // Run ffprobe on the latest recording and display message
@@ -1059,6 +1205,12 @@ static int HitTest(int mouseX, int mouseY, int* pData) {
         }
     }
 
+    // Legacy IFEO repair banner click
+    if (IsLegacyIFEOActive()) {
+        RectF rcInfo(16.0f, 448.0f, BASE_WIDTH - 32.0f, 52.0f);
+        if (rcInfo.Contains(lx, ly)) return HIT_ALERT_REPAIR;
+    }
+
     // Auto-start Checkbox
     RectF rcAuto(16.0f, 336.0f, BASE_WIDTH - 32.0f, 40.0f);
     if (rcAuto.Contains(lx, ly)) return HIT_AUTOSTART;
@@ -1173,6 +1325,11 @@ static void ShowTrayMenu(HWND hWnd) {
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
 
     // 4. Utility / System
+    if (IsLegacyIFEOActive()) {
+        AppendMenuW(hMenu, MF_STRING, IDM_REPAIR, L"[!] Fix Win+Shift+S Error (Repair IFEO)");
+    } else {
+        AppendMenuW(hMenu, MF_STRING, IDM_REPAIR, L"Repair Snipping Tool Shortcuts");
+    }
     AppendMenuW(hMenu, MF_STRING, IDM_STORAGE_CHECK, L"Storage Guardian: Check Status");
     AppendMenuW(hMenu, MF_STRING, IDM_RESET_ZOOM,    L"Reset Zoom (100%)");
     AppendMenuW(hMenu, MF_STRING, IDM_RESTART_SVC,   L"Rescan Snipping Tool");
@@ -1330,6 +1487,8 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
                 g_QualityLevel = data;
                 SaveSettings();
                 InvalidateRect(hWnd, NULL, FALSE);
+            } else if (hit == HIT_ALERT_REPAIR) {
+                RepairSnippingToolAssociations(hWnd);
             } else if (hit == HIT_AUTOSTART) {
                 g_AutoStart = !g_AutoStart;
                 SetAutoStart(g_AutoStart);
@@ -1398,6 +1557,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
                 case IDM_FOLDER: OpenRecordingsFolder(); break;
                 case IDM_ANALYZE: AnalyzeLatestRecording(hWnd); break;
                 case IDM_STORAGE_CHECK: RunStorageGuardian(hWnd, TRUE); break;
+                case IDM_REPAIR: RepairSnippingToolAssociations(hWnd); break;
 
                 case IDM_FPS_AUTO: g_CurrentFPS = 0;   SaveSettings(); UpdateTrayTooltip(); InvalidateRect(hWnd, NULL, FALSE); break;
                 case IDM_FPS_60:   g_CurrentFPS = 60;  SaveSettings(); UpdateTrayTooltip(); InvalidateRect(hWnd, NULL, FALSE); break;
@@ -1469,6 +1629,15 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow) {
     InitDarkMode();
     g_hInstance = hInstance;
+
+    // Quietly clean up legacy IFEO hook if elevated
+    HKEY hIfeoKey;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\SnippingTool.exe",
+        0, KEY_SET_VALUE, &hIfeoKey) == ERROR_SUCCESS) {
+        RegDeleteValueW(hIfeoKey, L"Debugger");
+        RegCloseKey(hIfeoKey);
+    }
 
     GdiplusStartupInput gdiplusStartupInput;
     GdiplusStartup(&g_gdiplusToken, &gdiplusStartupInput, NULL);

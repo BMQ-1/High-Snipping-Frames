@@ -50,7 +50,12 @@ static BOOL InjectDLL(DWORD pid, const WCHAR* dllPath) {
         return FALSE;
     }
 
-    HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
+    DWORD accessRights = PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION | 
+                         PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ;
+    HANDLE hProcess = OpenProcess(accessRights, FALSE, pid);
+    if (!hProcess) {
+        hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
+    }
     if (!hProcess) {
         Log("[SnippingToolDaemon] OpenProcess(PID %u) failed (err: %u)", pid, GetLastError());
         return FALSE;

@@ -72,6 +72,19 @@ static void Log(const char* fmt, ...) {
 
 static HMODULE g_hMod = NULL;
 
+// Normalize fractional display refresh rates (e.g. 59.94Hz -> 60Hz, 143.98Hz -> 144Hz)
+static UINT32 NormalizeRefreshRate(UINT32 hz) {
+    if (hz >= 58 && hz <= 62) return 60;
+    if (hz >= 73 && hz <= 77) return 75;
+    if (hz >= 88 && hz <= 92) return 90;
+    if (hz >= 118 && hz <= 122) return 120;
+    if (hz >= 142 && hz <= 146) return 144;
+    if (hz >= 163 && hz <= 167) return 165;
+    if (hz >= 238 && hz <= 242) return 240;
+    if (hz >= 358 && hz <= 362) return 360;
+    return hz;
+}
+
 // Detect highest refresh rate among all active displays
 static UINT32 DetectPrimaryRefreshRate() {
     UINT32 maxFreq = 60;
@@ -90,7 +103,7 @@ static UINT32 DetectPrimaryRefreshRate() {
             }
         }
     }
-    return (maxFreq >= 60) ? maxFreq : 144;
+    return NormalizeRefreshRate((maxFreq >= 60) ? maxFreq : 144);
 }
 
 // Detect refresh rate of the monitor where the cursor / active recording area is located
@@ -108,13 +121,23 @@ static UINT32 DetectActiveMonitorRefreshRate() {
             dm.dmSize = sizeof(dm);
             if (EnumDisplaySettingsW(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm)) {
                 if (dm.dmDisplayFrequency >= 30 && dm.dmDisplayFrequency <= 500) {
-                    return dm.dmDisplayFrequency;
+                    return NormalizeRefreshRate(dm.dmDisplayFrequency);
                 }
             }
         }
     }
     return DetectPrimaryRefreshRate();
 }
+
+static float GetHudScale(HWND hWnd) {
+    HDC hdc = GetDC(hWnd);
+    int dpi = GetDeviceCaps(hdc, LOGPIXELSY);
+    ReleaseDC(hWnd, hdc);
+    float s = (dpi > 0) ? ((float)dpi / 96.0f) : 1.0f;
+    return (s < 1.0f) ? 1.0f : s;
+}
+
+static void HideRecordingHUD();
 
 static LRESULT CALLBACK HudWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
@@ -127,11 +150,18 @@ static LRESULT CALLBACK HudWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lP
             InvalidateRect(hWnd, NULL, FALSE);
             break;
         }
+        case WM_RBUTTONUP: {
+            // Failsafe: User can right-click the HUD to dismiss it immediately
+            HideRecordingHUD();
+            break;
+        }
         case WM_PAINT: {
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hWnd, &ps);
             RECT rc;
             GetClientRect(hWnd, &rc);
+
+            float s = GetHudScale(hWnd);
 
             // Double buffering
             HDC memDC = CreateCompatibleDC(hdc);
@@ -144,19 +174,24 @@ static LRESULT CALLBACK HudWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lP
             HPEN penBorder = CreatePen(PS_SOLID, 1, RGB(55, 55, 55));
             HPEN penOld = (HPEN)SelectObject(memDC, penBorder);
 
-            RoundRect(memDC, rc.left, rc.top, rc.right, rc.bottom, 12, 12);
+            int roundRadius = (int)(12.0f * s + 0.5f);
+            RoundRect(memDC, rc.left, rc.top, rc.right, rc.bottom, roundRadius, roundRadius);
 
             // Red recording dot
+            int dotSize = (int)(8.0f * s + 0.5f);
+            int dotLeft = (int)(10.0f * s + 0.5f);
+            int dotTop  = (rc.bottom - dotSize) / 2;
             HBRUSH brRed = CreateSolidBrush(RGB(255, 59, 48));
             SelectObject(memDC, brRed);
             HPEN penRed = CreatePen(PS_SOLID, 1, RGB(255, 59, 48));
             SelectObject(memDC, penRed);
-            Ellipse(memDC, 10, (rc.bottom - 8) / 2, 18, (rc.bottom + 8) / 2);
+            Ellipse(memDC, dotLeft, dotTop, dotLeft + dotSize, dotTop + dotSize);
 
             // Text: REC  144 FPS  |  00:12
             SetBkMode(memDC, TRANSPARENT);
             SetTextColor(memDC, RGB(240, 240, 240));
-            HFONT hFont = CreateFontW(-11, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+            int fontHeight = - (int)(11.0f * s + 0.5f);
+            HFONT hFont = CreateFontW(fontHeight, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
                                       DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                                       CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
             HFONT oldFont = (HFONT)SelectObject(memDC, hFont);
@@ -166,7 +201,7 @@ static LRESULT CALLBACK HudWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lP
             DWORD secs = g_HudElapsedSec % 60;
             swprintf(hudText, 64, L"REC  %u FPS  |  %02u:%02u", g_HudFPS, mins, secs);
 
-            RECT rcText = { 24, 0, rc.right - 6, rc.bottom };
+            RECT rcText = { (LONG)(24.0f * s + 0.5f), 0, rc.right - (LONG)(6.0f * s + 0.5f), rc.bottom };
             DrawTextW(memDC, hudText, -1, &rcText, DT_SINGLELINE | DT_VCENTER | DT_LEFT);
 
             // Copy to screen
@@ -212,10 +247,16 @@ static DWORD WINAPI HudThreadProc(LPVOID lpParam) {
     MONITORINFO mi = { sizeof(mi) };
     GetMonitorInfoW(hMon, &mi);
 
-    int w = 156;
-    int h = 30;
-    int x = mi.rcMonitor.right - w - 24;
-    int y = mi.rcMonitor.top + 18;
+    HDC hdcScreen = GetDC(NULL);
+    int dpi = GetDeviceCaps(hdcScreen, LOGPIXELSY);
+    ReleaseDC(NULL, hdcScreen);
+    float s = (dpi > 0) ? ((float)dpi / 96.0f) : 1.0f;
+    if (s < 1.0f) s = 1.0f;
+
+    int w = (int)(164.0f * s + 0.5f);
+    int h = (int)(32.0f * s + 0.5f);
+    int x = mi.rcMonitor.right - w - (int)(24.0f * s + 0.5f);
+    int y = mi.rcMonitor.top + (int)(18.0f * s + 0.5f);
 
     g_hWndHUD = CreateWindowExW(
         WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
@@ -352,10 +393,18 @@ static void LoadConfig(HMODULE hMod) {
         wcscpy(iniPath, L"C:\\Program Files\\SnippingToolHighFPS\\SnippingToolHighFPS.ini");
     }
 
-    // Write log to AppData Local Temp (always writable by packaged apps)
-    WCHAR tempPath[MAX_PATH];
-    if (GetTempPathW(MAX_PATH, tempPath)) {
-        swprintf(g_LogPath, MAX_PATH, L"%sSnippingToolHighFPS.log", tempPath);
+    // Write log to shared AppContainer directory (C:\ProgramData\SnippingToolHighFPS)
+    if (!g_LogPath[0]) {
+        swprintf(g_LogPath, MAX_PATH, L"C:\\ProgramData\\SnippingToolHighFPS\\SnippingToolHighFPS.log");
+        FILE* tfp = _wfopen(g_LogPath, L"a");
+        if (tfp) {
+            fclose(tfp);
+        } else {
+            WCHAR tempPath[MAX_PATH];
+            if (GetTempPathW(MAX_PATH, tempPath)) {
+                swprintf(g_LogPath, MAX_PATH, L"%sSnippingToolHighFPS.log", tempPath);
+            }
+        }
     }
 
     g_PerMonitorAutoMatch = GetPrivateProfileIntW(L"Settings", L"PerMonitorAutoMatch", 1, iniPath);
@@ -437,10 +486,39 @@ extern "C" __declspec(dllexport) HRESULT StartCaptureHook(void* pWrapper) {
     // 2. Show Invisible In-Recording HUD (excluded from capture via WDA_EXCLUDEFROMCAPTURE)
     ShowRecordingHUD(g_TargetFPS);
 
-    // 1. Unlock compositor to TargetFPS
+    // 3. Unlock compositor to TargetFPS
     UnlockCaptureSession(pSession);
 
-    // 2. Call original StartCapture on pSession (slot 6: rax + 0x30)
+    // 4. Hook IClosable::Close on capture session so HUD hides automatically when recording stops
+    static const IID IID_IClosable_Local = 
+        { 0x30d5a829, 0x7fa4, 0x4026, { 0x83, 0xbb, 0xd7, 0x5b, 0xae, 0x4e, 0xa9, 0x9e } };
+    typedef HRESULT (__stdcall *CloseFn)(void*);
+    static CloseFn s_pOriginalClose = NULL;
+
+    auto HookedClose = [](void* pThis) -> HRESULT {
+        Log("[SnippingToolHighFPS] Capture Session Closed -> Auto-dismissing HUD and reverting MMCSS");
+        HideRecordingHUD();
+        if (s_pOriginalClose) return s_pOriginalClose(pThis);
+        return S_OK;
+    };
+
+    IUnknown* pUnkSession = (IUnknown*)pSession;
+    void* pClosable = NULL;
+    if (SUCCEEDED(pUnkSession->QueryInterface(IID_IClosable_Local, &pClosable)) && pClosable) {
+        void** vtbl = *(void***)pClosable;
+        if (vtbl && vtbl[6] != (void*)(+HookedClose)) {
+            DWORD oldProt;
+            if (VirtualProtect(&vtbl[6], sizeof(void*), PAGE_EXECUTE_READWRITE, &oldProt)) {
+                s_pOriginalClose = (CloseFn)vtbl[6];
+                vtbl[6] = (void*)(+HookedClose);
+                VirtualProtect(&vtbl[6], sizeof(void*), oldProt, &oldProt);
+                Log("[SnippingToolHighFPS] IClosable::Close hooked (original: 0x%p)", s_pOriginalClose);
+            }
+        }
+        ((IUnknown*)pClosable)->Release();
+    }
+
+    // 5. Call original StartCapture on pSession (slot 6: rax + 0x30)
     typedef HRESULT (__stdcall *StartCaptureFn)(void*);
     StartCaptureFn startCapture = (StartCaptureFn)(*(void***)pSession)[6];
     HRESULT hr = startCapture(pSession);

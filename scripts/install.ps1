@@ -40,10 +40,26 @@ foreach ($f in $filesToDeploy) {
     Copy-Item (Join-Path $binDir $f) -Destination (Join-Path $installDir $f) -Force
 }
 
-Write-Host "[3/5] Granting AppContainer execution permissions..." -ForegroundColor Yellow
-icacls (Join-Path $installDir "*") /grant "ALL APPLICATION PACKAGES:(OI)(CI)RX" /t | Out-Null
+Write-Host "[3/6] Purging legacy IFEO hooks to prevent shortcut conflicts..." -ForegroundColor Yellow
+$ifeoKeys = @(
+    "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\SnippingTool.exe",
+    "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\ScreenClippingHost.exe",
+    "HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\SnippingTool.exe"
+)
+foreach ($ik in $ifeoKeys) {
+    if (Test-Path $ik) {
+        Remove-ItemProperty -Path $ik -Name "Debugger" -ErrorAction SilentlyContinue
+    }
+}
 
-Write-Host "[4/5] Creating Start Menu shortcut..." -ForegroundColor Yellow
+Write-Host "[4/6] Granting AppContainer execution permissions..." -ForegroundColor Yellow
+icacls (Join-Path $installDir "*") /grant "ALL APPLICATION PACKAGES:(OI)(CI)RX" /t | Out-Null
+$packageLocalState = Join-Path $env:LOCALAPPDATA "Packages\Microsoft.ScreenSketch_8wekyb3d8bbwe\LocalState"
+if (Test-Path $packageLocalState) {
+    icacls $packageLocalState /grant "ALL APPLICATION PACKAGES:(OI)(CI)M" /t 2>$null | Out-Null
+}
+
+Write-Host "[5/6] Creating Start Menu shortcut..." -ForegroundColor Yellow
 try {
     $wsShell = New-Object -ComObject WScript.Shell
     $startMenuDir = [Environment]::GetFolderPath('Programs')
@@ -60,7 +76,7 @@ try {
     Write-Host "      Could not create shortcut (skipping)" -ForegroundColor Gray
 }
 
-Write-Host "[5/5] Configuring unified auto-start in HKCU Run..." -ForegroundColor Yellow
+Write-Host "[6/6] Configuring unified auto-start in HKCU Run..." -ForegroundColor Yellow
 $guiExe = Join-Path $installDir "HighSnippingFramesGUI.exe"
 
 # Clean up legacy dual-process startup entries

@@ -7,19 +7,31 @@ Write-Host "=======================================================" -Foreground
 Write-Host "[1/4] Stopping processes..." -ForegroundColor Yellow
 Stop-Process -Name "SnippingToolDaemon", "HighSnippingFramesGUI" -Force -ErrorAction SilentlyContinue
 
-Write-Host "[2/4] Removing autostart registry entries..." -ForegroundColor Yellow
+Write-Host "[2/5] Removing autostart registry entries..." -ForegroundColor Yellow
 Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "HighSnippingFrames" -ErrorAction SilentlyContinue
 Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "SnippingToolHighFPSDaemon" -ErrorAction SilentlyContinue
 Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "HighSnippingFramesGUI" -ErrorAction SilentlyContinue
 
-Write-Host "[3/4] Removing Start Menu shortcut..." -ForegroundColor Yellow
+Write-Host "[3/5] Purging any legacy IFEO hooks..." -ForegroundColor Yellow
+$ifeoKeys = @(
+    "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\SnippingTool.exe",
+    "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\ScreenClippingHost.exe",
+    "HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\SnippingTool.exe"
+)
+foreach ($ik in $ifeoKeys) {
+    if (Test-Path $ik) {
+        Remove-ItemProperty -Path $ik -Name "Debugger" -ErrorAction SilentlyContinue
+    }
+}
+
+Write-Host "[4/5] Removing Start Menu shortcut..." -ForegroundColor Yellow
 $startMenuDir = [Environment]::GetFolderPath('Programs')
 $shortcutPath = Join-Path $startMenuDir "High Snipping Frames.lnk"
 if (Test-Path $shortcutPath) {
     Remove-Item -Path $shortcutPath -Force -ErrorAction SilentlyContinue
 }
 
-Write-Host "[4/4] Removing installed files..." -ForegroundColor Yellow
+Write-Host "[5/5] Removing installed files..." -ForegroundColor Yellow
 $installDirs = @("C:\Program Files\SnippingToolHighFPS", (Join-Path $env:LOCALAPPDATA "HighSnippingFrames"))
 foreach ($dir in $installDirs) {
     if (Test-Path $dir) {
