@@ -1015,7 +1015,7 @@ static void RenderUI(Graphics& g, int clientWidth, int clientHeight) {
     SolidBrush brBadge(Color(0x33, 0x33, 0x33));
     FillRoundedRect(g, brBadge, rcTopBadge, 4.0f);
     DrawRoundedRect(g, penBorder, rcTopBadge, 4.0f);
-    g.DrawString(L"v1.0 NATIVE", -1, &fontBadge, rcTopBadge, &sfCenter, &brAccentLight);
+    g.DrawString(L"v1.1 NATIVE", -1, &fontBadge, rcTopBadge, &sfCenter, &brAccentLight);
 
     // 3. HERO CARD: Prominent Live Target Framerate Display
     // Resolves confusion: clearly shows the selected framerate dynamically!

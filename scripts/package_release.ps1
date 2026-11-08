@@ -7,7 +7,7 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $repoDir = Split-Path -Parent $scriptDir
 $distDir = Join-Path $repoDir "dist"
 $tempStageDir = Join-Path $distDir "High-Snipping-Frames-Portable"
-$zipOutput = Join-Path $distDir "High-Snipping-Frames-v1.0-Portable.zip"
+$zipOutput = Join-Path $distDir "High-Snipping-Frames-v1.1-Portable.zip"
 
 Write-Host "=======================================================" -ForegroundColor Cyan
 Write-Host "       High Snipping Frames - Packaging Release        " -ForegroundColor Cyan
@@ -69,7 +69,8 @@ https://github.com/BMQ-1/High-Snipping-Frames
 Set-Content -Path (Join-Path $tempStageDir "QUICK_START.txt") -Value $txtReadme -Encoding UTF8
 
 Write-Host "[3/4] Creating ZIP archive..." -ForegroundColor Yellow
-Compress-Archive -Path "$tempStageDir\*" -DestinationPath $zipOutput -CompressionLevel Optimal
+Compress-Archive -Path "$tempStageDir\*" -DestinationPath $zipOutput -CompressionLevel Optimal
+Copy-Item (Join-Path (Join-Path $repoDir "bin") "HighSnippingFramesGUI.exe") -Destination (Join-Path $distDir "HighSnippingFramesGUI.exe") -Force
 
 Write-Host "[4/4] Cleaning up staging folder..." -ForegroundColor Yellow
 Remove-Item $tempStageDir -Recurse -Force
