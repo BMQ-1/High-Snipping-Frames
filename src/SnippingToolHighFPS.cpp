@@ -7,33 +7,38 @@
 #include <stdlib.h>
 #include <stdarg.h>
 
+#ifdef _MSC_VER
+#include <intrin.h>
+#define GET_RETURN_ADDRESS() _ReturnAddress()
+#else
+#define GET_RETURN_ADDRESS() __builtin_return_address(0)
+#endif
+
 // IGraphicsCaptureSession5 GUID: 67c0ea62-1f85-5061-925a-239be0ac09cb
 static const IID IID_IGraphicsCaptureSession5 = 
     { 0x67c0ea62, 0x1f85, 0x5061, { 0x92, 0x5a, 0x23, 0x9b, 0xe0, 0xac, 0x09, 0xcb } };
 
 // Active configuration
 static UINT32 g_TargetFPS = 144;
-static int    g_BitrateMultiplier = 1; // 0 = Balanced, 1 = High Quality (1.5x), 2 = Ultra Gaming (2.0x)
+static int    g_BitrateMultiplier = 0; // 0 = Balanced (16-30 Mbps, perfect for Discord/Slack), 1 = High (22-45 Mbps), 2 = Ultra Gaming (30-65 Mbps)
 static BOOL   g_EnableCompositorUnlock = TRUE;
 static BOOL   g_EnableEncoderUnlock = TRUE;
 static BOOL   g_BypassThrottle = TRUE;
 static BOOL   g_EnableRecordingHUD = TRUE;
 static BOOL   g_PerMonitorAutoMatch = TRUE;
 static BOOL   g_EnableMMCSS = TRUE;       // Windows Multimedia Class Scheduler Service
-static BOOL   g_FullRangeColor = TRUE;    // BT.709 Full-Range (0-255) Color Matrix
 static WCHAR  g_LogPath[MAX_PATH] = { 0 };
+static WCHAR  g_StatusPath[MAX_PATH] = { 0 };
 
-// Media Foundation GUIDs for Full-Range BT.709 color matrix:
-static const IID IID_IMFAttributes_Local = 
-    { 0x2cd2d921, 0xc447, 0x44a7, { 0xa1, 0x3c, 0x4a, 0xda, 0xb5, 0x11, 0x0f, 0x34 } };
+// Thread-safety lock for logging, config loading, and MMCSS transitions
+static CRITICAL_SECTION g_csLock;
+static volatile LONG    g_csInitialized = 0;
 
-// MF_MT_VIDEO_NOMINAL_RANGE: {3E414F72-AC34-4e88-920C-03D7506FDF04}
-static const GUID GUID_MF_MT_VIDEO_NOMINAL_RANGE = 
-    { 0x3e414f72, 0xac34, 0x4e88, { 0x92, 0x0c, 0x03, 0xd7, 0x50, 0x6f, 0xdf, 0x04 } };
+// Patch verification bitmask (bits 0..3 correspond to Patches 1..4)
+static DWORD  g_PatchStatusMask = 0;
 
-// MF_MT_YUV_MATRIX: {3E414F74-AC34-4e88-920C-03D7506FDF04}
-static const GUID GUID_MF_MT_YUV_MATRIX = 
-    { 0x3e414f74, 0xac34, 0x4e88, { 0x92, 0x0c, 0x03, 0xd7, 0x50, 0x6f, 0xdf, 0x04 } };
+// Stored pointer to Patch 2 for caller discrimination in MediaRatioHook
+static BYTE*  g_pMatch2 = NULL;
 
 // -------------------------------------------------------------
 // Invisible In-Recording HUD (WDA_EXCLUDEFROMCAPTURE)
@@ -60,6 +65,7 @@ static void Log(const char* fmt, ...) {
     OutputDebugStringA(buf);
 
     if (g_LogPath[0]) {
+        if (g_csInitialized) EnterCriticalSection(&g_csLock);
         FILE* fp = _wfopen(g_LogPath, L"a");
         if (fp) {
             SYSTEMTIME st;
@@ -67,10 +73,26 @@ static void Log(const char* fmt, ...) {
             fprintf(fp, "[%02d:%02d:%02d.%03d] %s\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, buf);
             fclose(fp);
         }
+        if (g_csInitialized) LeaveCriticalSection(&g_csLock);
     }
 }
 
 static HMODULE g_hMod = NULL;
+
+static BOOL IsUnderProgramFiles(const WCHAR* path) {
+    if (!path || !path[0]) return FALSE;
+    const WCHAR* envVars[] = { L"ProgramFiles", L"ProgramFiles(x86)", L"ProgramW6432" };
+    for (int i = 0; i < 3; i++) {
+        WCHAR pf[MAX_PATH];
+        DWORD len = GetEnvironmentVariableW(envVars[i], pf, MAX_PATH);
+        if (len > 0 && len < MAX_PATH) {
+            if (_wcsnicmp(path, pf, len) == 0 && (path[len] == L'\\' || path[len] == L'\0')) {
+                return TRUE;
+            }
+        }
+    }
+    return FALSE;
+}
 
 // Normalize fractional display refresh rates (e.g. 59.94Hz -> 60Hz, 143.98Hz -> 144Hz)
 static UINT32 NormalizeRefreshRate(UINT32 hz) {
@@ -278,7 +300,7 @@ static DWORD WINAPI HudThreadProc(LPVOID lpParam) {
     );
 
     if (g_hWndHUD) {
-        // The magic: EXCLUDE completely from all video recording/captures!
+        // Exclude completely from all video recording/captures
         SetWindowDisplayAffinity(g_hWndHUD, WDA_EXCLUDEFROMCAPTURE);
         ShowWindow(g_hWndHUD, SW_SHOWNOACTIVATE);
         UpdateWindow(g_hWndHUD);
@@ -313,6 +335,7 @@ typedef HANDLE (WINAPI *fnAvSetMmThreadCharacteristicsW)(LPCWSTR, LPDWORD);
 typedef BOOL (WINAPI *fnAvRevertMmThreadCharacteristics)(HANDLE);
 
 static HANDLE g_hMmcssTask = NULL;
+static DWORD  g_dwMmcssThreadId = 0;
 
 static void EnableMMCSS() {
     if (g_hMmcssTask) return;
@@ -327,6 +350,9 @@ static void EnableMMCSS() {
                 taskIndex = 0;
                 g_hMmcssTask = pSet(L"Games", &taskIndex);
             }
+            if (g_hMmcssTask) {
+                g_dwMmcssThreadId = GetCurrentThreadId();
+            }
         }
     }
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
@@ -334,40 +360,32 @@ static void EnableMMCSS() {
 }
 
 static void DisableMMCSS() {
-    if (g_hMmcssTask) {
-        HMODULE hAvrt = GetModuleHandleW(L"avrt.dll");
-        if (hAvrt) {
-            fnAvRevertMmThreadCharacteristics pRevert = 
-                (fnAvRevertMmThreadCharacteristics)GetProcAddress(hAvrt, "AvRevertMmThreadCharacteristics");
-            if (pRevert) {
-                pRevert(g_hMmcssTask);
+    if (g_csInitialized) EnterCriticalSection(&g_csLock);
+    HANDLE hTask = g_hMmcssTask;
+    DWORD  dwOrigTid = g_dwMmcssThreadId;
+    g_hMmcssTask = NULL;
+    g_dwMmcssThreadId = 0;
+    if (g_csInitialized) LeaveCriticalSection(&g_csLock);
+
+    if (hTask || dwOrigTid != 0) {
+        if (dwOrigTid == GetCurrentThreadId()) {
+            if (hTask) {
+                HMODULE hAvrt = GetModuleHandleW(L"avrt.dll");
+                if (hAvrt) {
+                    fnAvRevertMmThreadCharacteristics pRevert = 
+                        (fnAvRevertMmThreadCharacteristics)GetProcAddress(hAvrt, "AvRevertMmThreadCharacteristics");
+                    if (pRevert) pRevert(hTask);
+                }
+            }
+            SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
+        } else if (dwOrigTid != 0) {
+            HANDLE hThread = OpenThread(THREAD_SET_INFORMATION, FALSE, dwOrigTid);
+            if (hThread) {
+                SetThreadPriority(hThread, THREAD_PRIORITY_NORMAL);
+                CloseHandle(hThread);
             }
         }
-        g_hMmcssTask = NULL;
-        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
         Log("[SnippingToolHighFPS] MMCSS Quantum Boosting reverted to normal");
-    }
-}
-
-static void ApplyFullRangeBT709(void* pRatioObj) {
-    if (!g_FullRangeColor || !pRatioObj) return;
-
-    IUnknown* pUnk = (IUnknown*)pRatioObj;
-    void* pAttrs = NULL;
-
-    HRESULT hr = pUnk->QueryInterface(IID_IMFAttributes_Local, &pAttrs);
-    if (SUCCEEDED(hr) && pAttrs) {
-        typedef HRESULT (__stdcall *SetUINT32Fn)(void*, REFGUID, UINT32);
-        SetUINT32Fn setUINT32 = (SetUINT32Fn)(*(void***)pAttrs)[21]; // Slot 21: SetUINT32
-
-        // Enforce Full Range (0-255) and BT.709 Matrix for rich blacks and lossless vibrancy
-        HRESULT hrRange  = setUINT32(pAttrs, GUID_MF_MT_VIDEO_NOMINAL_RANGE, 2); // 2 = MFNominalRange_0_255
-        HRESULT hrMatrix = setUINT32(pAttrs, GUID_MF_MT_YUV_MATRIX, 2);          // 2 = MFVideoTransferMatrix_BT709
-        Log("[SnippingToolHighFPS] Enforced BT.709 Full-Range Colors (0-255) -> Range: 0x%08X, Matrix: 0x%08X", hrRange, hrMatrix);
-
-        ((IUnknown*)pAttrs)->Release();
-    } else {
-        Log("[SnippingToolHighFPS] Object QueryInterface(IMFAttributes) returned 0x%08X", hr);
     }
 }
 
@@ -387,62 +405,137 @@ static void HideRecordingHUD() {
     }
 }
 
+static void PublishPatchStatus(DWORD mask, DWORD expectedMask) {
+    if (!g_StatusPath[0]) return;
+    int applied = 0, expected = 0;
+    for (int i = 0; i < 4; i++) {
+        if (mask & (1U << i)) applied++;
+        if (expectedMask & (1U << i)) expected++;
+    }
+    WCHAR buf[64];
+    swprintf(buf, 64, L"%d", applied);
+    WritePrivateProfileStringW(L"Status", L"AppliedPatches", buf, g_StatusPath);
+    swprintf(buf, 64, L"%d", expected);
+    WritePrivateProfileStringW(L"Status", L"ExpectedPatches", buf, g_StatusPath);
+    swprintf(buf, 64, L"%u", GetCurrentProcessId());
+    WritePrivateProfileStringW(L"Status", L"SnippingPID", buf, g_StatusPath);
+}
+
 // Load INI configuration dynamically
 static void LoadConfig(HMODULE hMod) {
+    if (g_csInitialized) EnterCriticalSection(&g_csLock);
+
     if (hMod) g_hMod = hMod;
     if (!hMod) hMod = g_hMod;
 
+    WCHAR dllIniPath[MAX_PATH] = { 0 };
     WCHAR iniPath[MAX_PATH] = { 0 };
+    BOOL  isPortable = FALSE;
+
     if (hMod) {
-        GetModuleFileNameW(hMod, iniPath, MAX_PATH);
-        WCHAR* dot = wcsrchr(iniPath, L'.');
+        GetModuleFileNameW(hMod, dllIniPath, MAX_PATH);
+        WCHAR* dot = wcsrchr(dllIniPath, L'.');
         if (dot) wcscpy(dot, L".ini");
+        if (!IsUnderProgramFiles(dllIniPath) && GetFileAttributesW(dllIniPath) != INVALID_FILE_ATTRIBUTES) {
+            wcscpy(iniPath, dllIniPath);
+            isPortable = TRUE;
+        }
     }
 
-    if (GetFileAttributesW(iniPath) == INVALID_FILE_ATTRIBUTES) {
-        wcscpy(iniPath, L"C:\\Program Files\\SnippingToolHighFPS\\SnippingToolHighFPS.ini");
+    // In installed mode (or if portable INI absent), use shared user-writable %PROGRAMDATA% INI
+    if (!isPortable) {
+        WCHAR progData[MAX_PATH];
+        if (GetEnvironmentVariableW(L"ProgramData", progData, MAX_PATH)) {
+            WCHAR progDataIni[MAX_PATH];
+            swprintf(progDataIni, MAX_PATH, L"%ls\\SnippingToolHighFPS\\SnippingToolHighFPS.ini", progData);
+            if (GetFileAttributesW(progDataIni) != INVALID_FILE_ATTRIBUTES) {
+                wcscpy(iniPath, progDataIni);
+            }
+        }
+        if (!iniPath[0] && dllIniPath[0] && GetFileAttributesW(dllIniPath) != INVALID_FILE_ATTRIBUTES) {
+            wcscpy(iniPath, dllIniPath);
+        }
     }
 
-    // Write log to shared AppContainer directory (C:\ProgramData\SnippingToolHighFPS)
+    // Initialize log & status paths (portable beside DLL, or %PROGRAMDATA% / %TEMP%)
     if (!g_LogPath[0]) {
-        swprintf(g_LogPath, MAX_PATH, L"C:\\ProgramData\\SnippingToolHighFPS\\SnippingToolHighFPS.log");
-        FILE* tfp = _wfopen(g_LogPath, L"a");
-        if (tfp) {
-            fclose(tfp);
+        if (isPortable && dllIniPath[0]) {
+            wcscpy(g_LogPath, dllIniPath);
+            WCHAR* dot = wcsrchr(g_LogPath, L'.');
+            if (dot) wcscpy(dot, L".log");
+
+            wcscpy(g_StatusPath, dllIniPath);
+            WCHAR* sl = wcsrchr(g_StatusPath, L'\\');
+            if (sl) wcscpy(sl + 1, L"patch_status.ini");
         } else {
+            WCHAR progData[MAX_PATH];
+            if (GetEnvironmentVariableW(L"ProgramData", progData, MAX_PATH)) {
+                swprintf(g_LogPath, MAX_PATH, L"%ls\\SnippingToolHighFPS\\SnippingToolHighFPS.log", progData);
+                swprintf(g_StatusPath, MAX_PATH, L"%ls\\SnippingToolHighFPS\\patch_status.ini", progData);
+                FILE* tfp = _wfopen(g_LogPath, L"a");
+                if (tfp) {
+                    fclose(tfp);
+                } else {
+                    g_LogPath[0] = L'\0';
+                    g_StatusPath[0] = L'\0';
+                }
+            }
+        }
+        if (!g_LogPath[0]) {
             WCHAR tempPath[MAX_PATH];
             if (GetTempPathW(MAX_PATH, tempPath)) {
                 swprintf(g_LogPath, MAX_PATH, L"%lsSnippingToolHighFPS.log", tempPath);
             }
         }
+        // Cap log file size at 256 KB on startup to avoid unbounded disk growth
+        if (g_LogPath[0]) {
+            WIN32_FILE_ATTRIBUTE_DATA fad;
+            if (GetFileAttributesExW(g_LogPath, GetFileExInfoStandard, &fad)) {
+                if (fad.nFileSizeHigh > 0 || fad.nFileSizeLow > 262144) {
+                    FILE* rfp = _wfopen(g_LogPath, L"w");
+                    if (rfp) fclose(rfp);
+                }
+            }
+        }
     }
 
     g_PerMonitorAutoMatch = GetPrivateProfileIntW(L"Settings", L"PerMonitorAutoMatch", 1, iniPath);
-    g_EnableRecordingHUD  = GetPrivateProfileIntW(L"Settings", L"EnableRecordingHUD", 1, iniPath);
+
+    // Support both EnableRecordingHUD and ShowRecordingHUD aliases
+    int hudSetting = GetPrivateProfileIntW(L"Settings", L"EnableRecordingHUD", -1, iniPath);
+    if (hudSetting == -1) {
+        hudSetting = GetPrivateProfileIntW(L"Settings", L"ShowRecordingHUD", 1, iniPath);
+    }
+    g_EnableRecordingHUD = (hudSetting != 0);
 
     int configuredFps = GetPrivateProfileIntW(L"Settings", L"TargetFPS", 0, iniPath);
     if (configuredFps <= 0) {
         if (g_PerMonitorAutoMatch) {
             g_TargetFPS = DetectActiveMonitorRefreshRate();
-            Log("[SnippingToolHighFPS] Per-Monitor Auto Match: TargetFPS set to %u Hz (active monitor)", g_TargetFPS);
         } else {
             g_TargetFPS = DetectPrimaryRefreshRate();
-            Log("[SnippingToolHighFPS] Global Auto Match: TargetFPS set to %u Hz (highest display)", g_TargetFPS);
         }
     } else {
         g_TargetFPS = (UINT32)configuredFps;
-        Log("[SnippingToolHighFPS] TargetFPS loaded from INI: %u FPS", g_TargetFPS);
     }
 
     g_EnableMMCSS            = GetPrivateProfileIntW(L"Settings", L"EnableMMCSS", 1, iniPath);
-    g_FullRangeColor         = GetPrivateProfileIntW(L"Settings", L"FullRangeColor", 1, iniPath);
-    g_BitrateMultiplier      = GetPrivateProfileIntW(L"Settings", L"BitrateMultiplier", 1, iniPath);
+    g_BitrateMultiplier      = GetPrivateProfileIntW(L"Settings", L"BitrateMultiplier", 0, iniPath); // 0 = Balanced default
     g_EnableCompositorUnlock = GetPrivateProfileIntW(L"Settings", L"UnlockCompositor", 1, iniPath);
     g_EnableEncoderUnlock    = GetPrivateProfileIntW(L"Settings", L"UnlockEncoder", 1, iniPath);
     g_BypassThrottle         = GetPrivateProfileIntW(L"Settings", L"BypassThrottle", 1, iniPath);
 
-    Log("[SnippingToolHighFPS] Active Config -> TargetFPS: %u, BitrateMultiplier: %d, CompositorUnlock: %d, EncoderUnlock: %d, BypassThrottle: %d",
-        g_TargetFPS, g_BitrateMultiplier, g_EnableCompositorUnlock, g_EnableEncoderUnlock, g_BypassThrottle);
+    UINT32 snapFps = g_TargetFPS;
+    int snapMult = g_BitrateMultiplier;
+    BOOL snapComp = g_EnableCompositorUnlock;
+    BOOL snapEnc = g_EnableEncoderUnlock;
+    BOOL snapByp = g_BypassThrottle;
+    BOOL snapPerMon = g_PerMonitorAutoMatch;
+
+    if (g_csInitialized) LeaveCriticalSection(&g_csLock);
+
+    Log("[SnippingToolHighFPS] Config (%ls) -> TargetFPS: %u (AutoMatch=%d), Bitrate: %d, CompUnlock: %d, EncUnlock: %d, Bypass: %d",
+        iniPath[0] ? iniPath : L"<default>", snapFps, snapPerMon, snapMult, snapComp, snapEnc, snapByp);
 }
 
 // Unlocks compositor minimum update interval on GraphicsCaptureSession
@@ -457,9 +550,7 @@ static void UnlockCaptureSession(void* pSession) {
         typedef HRESULT (__stdcall *PutIntervalFn)(void*, INT64);
         PutIntervalFn putInterval = (PutIntervalFn)(*(void***)pSession5)[7];
 
-        // Dynamic V-Sync Cadence Pacing:
-        // Set exact 100ns presentation interval without integer truncation.
-        // During GPU spikes or frame drops, compositor delivers frames immediately.
+        // 100ns interval pacing
         INT64 interval_100ns = (g_TargetFPS > 0) ? (10000000LL / g_TargetFPS) : 0;
         HRESULT hrPut = putInterval(pSession5, interval_100ns);
         Log("[SnippingToolHighFPS] Compositor MinUpdateInterval(%lld ticks [%.2f ms]) -> 0x%08X (Pacing Active)",
@@ -488,7 +579,7 @@ extern "C" __declspec(dllexport) HRESULT StartCaptureHook(void* pWrapper) {
 
     Log("[SnippingToolHighFPS] StartCaptureHook triggered on session 0x%p (Target: %u FPS)", pSession, g_TargetFPS);
 
-    // 1. Enable MMCSS Thread Quantum Boosting (guarantees real-time CPU quanta during 99% GPU load)
+    // 1. Enable MMCSS Thread Quantum Boosting
     if (g_EnableMMCSS) {
         EnableMMCSS();
     }
@@ -519,7 +610,9 @@ extern "C" __declspec(dllexport) HRESULT StartCaptureHook(void* pWrapper) {
         if (vtbl && vtbl[6] != (void*)(+HookedClose)) {
             DWORD oldProt;
             if (VirtualProtect(&vtbl[6], sizeof(void*), PAGE_EXECUTE_READWRITE, &oldProt)) {
-                s_pOriginalClose = (CloseFn)vtbl[6];
+                if (s_pOriginalClose == NULL) {
+                    s_pOriginalClose = (CloseFn)vtbl[6];
+                }
                 vtbl[6] = (void*)(+HookedClose);
                 VirtualProtect(&vtbl[6], sizeof(void*), oldProt, &oldProt);
                 Log("[SnippingToolHighFPS] IClosable::Close hooked (original: 0x%p)", s_pOriginalClose);
@@ -536,35 +629,66 @@ extern "C" __declspec(dllexport) HRESULT StartCaptureHook(void* pWrapper) {
     return hr;
 }
 
+// -------------------------------------------------------------
+// Smart Bitrate Basis Calculation:
+// Solves the "TOO BIG VIDEOS" problem and 32-bit integer overflow!
+// Snipping Tool hardcodes: Bitrate = Width * Height * returned_fps * 0.14
+// By returning a calibrated basis instead of an inflated raw FPS:
+// 1. Videos are compact, high quality, and shareable on Discord/Slack.
+// 2. At 4K (8.3M pixels), 2 * Width * Height * basis NEVER overflows INT_MAX (2.14B).
+// -------------------------------------------------------------
+static UINT32 GetBitrateBasis(UINT32 targetFps, int qualityLevel) {
+    // QualityLevel:
+    // 0 = Balanced (Default): ~16 Mbps at 1080p, ~28 Mbps at 1440p, ~62 Mbps at 4K.
+    // 1 = High Quality:       ~22 Mbps at 1080p, ~39 Mbps at 1440p, ~86 Mbps at 4K.
+    // 2 = Ultra Gaming:       ~28 Mbps at 1080p, ~50 Mbps at 1440p, ~111 Mbps at 4K.
+    UINT32 base = 52;
+    if (qualityLevel == 1) base = 72;
+    else if (qualityLevel == 2) base = 94;
+
+    // Sub-linear scaling for higher FPS (inter-frame temporal redundancy increases with FPS)
+    if (targetFps >= 200) base = (base * 12) / 10;
+    else if (targetFps >= 120) base = (base * 11) / 10;
+
+    // Guard against 32-bit signed overflow: 2 * 3840 * 2160 * base < 2,147,483,647 (max basis = 129)
+    if (base > 120) base = 120;
+    return base;
+}
+
 // Global replacement for SnippingTool IMediaRatio frame rate query
 extern "C" __declspec(dllexport) UINT32 MediaRatioHook(void** ppRatio) {
-    // Reload config so any recent GUI/INI adjustments take effect immediately
     LoadConfig(g_hMod);
 
+    void* pRetAddr = GET_RETURN_ADDRESS();
+    BOOL isPacingCaller = FALSE;
+
+    // Dual-caller discrimination:
+    // Caller 2 (VideoFrameGenerator::Initialize pacing: 1000 / FPS) is within 64 bytes of match2.
+    // Caller 1 (CreateEncodingProfile bitrate: Width * Height * returned_fps * 0.14) is in the profile builder.
+    if (g_pMatch2 && ((BYTE*)pRetAddr >= (g_pMatch2 - 64) && (BYTE*)pRetAddr <= (g_pMatch2 + 64))) {
+        isPacingCaller = TRUE;
+    }
+
     if (!ppRatio || !*ppRatio) {
-        Log("[SnippingToolHighFPS] MediaRatioHook: NULL ratio pointer, returning %u", g_TargetFPS);
-        return g_TargetFPS;
+        UINT32 retVal = isPacingCaller ? g_TargetFPS : GetBitrateBasis(g_TargetFPS, g_BitrateMultiplier);
+        Log("[SnippingToolHighFPS] MediaRatioHook: NULL ratio pointer, returning %u (isPacing=%d)", retVal, isPacingCaller);
+        return retVal;
     }
 
     void* pRatio = *ppRatio;
-    Log("[SnippingToolHighFPS] MediaRatioHook called on pRatio=0x%p, setting to %u FPS", pRatio, g_TargetFPS);
-
     void** vtbl = *(void***)pRatio;
     if (vtbl) {
         typedef HRESULT (__stdcall *PutRatioFn)(void*, UINT32);
         PutRatioFn putNumerator   = (PutRatioFn)vtbl[6];
         PutRatioFn putDenominator = (PutRatioFn)vtbl[8];
 
-        // 1. Audio-Video Drift Prevention: Exact Rational Frame-Rate
+        // Safe rational timing:
+        // Always enforce denominator = 1 so integer division in Caller 2 (num / den) NEVER divides by zero!
         UINT32 num = g_TargetFPS;
         UINT32 den = 1;
-
         if (num == 59 || num == 60) {
-            UINT32 dispFreq = DetectPrimaryRefreshRate();
-            if (dispFreq == 59) {
-                num = 60000;
-                den = 1001; // Exact NTSC 59.940059... fps prevents 1000/1001 audio drift
-            }
+            num = 60;
+            den = 1;
         }
 
         HRESULT hr1 = putNumerator(pRatio, num);
@@ -573,23 +697,16 @@ extern "C" __declspec(dllexport) UINT32 MediaRatioHook(void** ppRatio) {
             num, hr1, den, hr2);
     }
 
-    // 2. Hardware Encoder Bitrate Scaling (Game Drop & High-Motion Protection)
-    // Snipping Tool multiplies returned value by width * height to allocate encoder bitrate buffer.
-    // Scaling this ensures fast-motion scenes never starve the hardware encoder or drop frames.
-    UINT32 calcFps = g_TargetFPS;
-    if (g_BitrateMultiplier == 1) {
-        // High Quality: 1.5x bitrate allocation
-        calcFps = (g_TargetFPS * 3) / 2;
-    } else if (g_BitrateMultiplier == 2) {
-        // Ultra Gaming: 2.0x bitrate allocation
-        calcFps = g_TargetFPS * 2;
+    if (isPacingCaller) {
+        Log("[SnippingToolHighFPS] Returning exact TargetFPS to Pacing Caller: %u FPS (1000/%u = %u ms)",
+            g_TargetFPS, g_TargetFPS, 1000 / (g_TargetFPS > 0 ? g_TargetFPS : 60));
+        return g_TargetFPS;
     }
 
-    // 3. Enforce BT.709 Full-Range Color Matrix (True Blacks and vibrant contrast)
-    ApplyFullRangeBT709(pRatio);
-
-    Log("[SnippingToolHighFPS] Returning bitrate basis: %u (BitrateMultiplier=%d)", calcFps, g_BitrateMultiplier);
-    return calcFps;
+    UINT32 bitrateBasis = GetBitrateBasis(g_TargetFPS, g_BitrateMultiplier);
+    Log("[SnippingToolHighFPS] Returning controlled bitrate basis: %u (BitrateMultiplier=%d, TargetFPS=%u)",
+        bitrateBasis, g_BitrateMultiplier, g_TargetFPS);
+    return bitrateBasis;
 }
 
 // Memory pattern scanner
@@ -632,6 +749,12 @@ static void ApplySnippingToolPatches() {
 
     Log("[SnippingToolHighFPS] Scanning SnippingTool.exe .text (Base: 0x%p, Size: 0x%IX)...", textBase, textSize);
 
+    DWORD appliedMask = 0;
+    DWORD expectedMask = 0;
+    if (g_BypassThrottle)         expectedMask |= 0x01;
+    if (g_EnableEncoderUnlock)    expectedMask |= 0x06; // Patches 2 & 3
+    if (g_EnableCompositorUnlock) expectedMask |= 0x08; // Patch 4
+
     // -------------------------------------------------------------
     // PATCH 1: Bypass Micro-Jitter Frame Dropper (VideoFrameGenerator::OnFrameArrived)
     // Pattern: 10 27 00 00 48 3b c1 7d 0e -> Change 7d 0e (jge) to eb 0e (jmp)
@@ -646,6 +769,7 @@ static void ApplySnippingToolPatches() {
                 pJge[0] = 0xEB; // jmp unconditional
                 VirtualProtect(pJge, 2, oldProt, &oldProt);
                 FlushInstructionCache(GetCurrentProcess(), pJge, 2);
+                appliedMask |= 0x01;
                 Log("[SnippingToolHighFPS] [OK] Patch 1 applied: Frame Dropper Bypassed at 0x%p", pJge);
             }
         } else {
@@ -661,6 +785,7 @@ static void ApplySnippingToolPatches() {
         const BYTE p2[] = { 0x33, 0xD2, 0xB8, 0xE8, 0x03, 0x00, 0x00, 0xF7, 0xF1 };
         BYTE* match2 = FindPattern(textBase, textSize, p2, sizeof(p2));
         if (match2) {
+            g_pMatch2 = match2; // Store for MediaRatioHook caller discrimination
             BYTE* pMath = match2 + 2; // at b8
             BYTE minIntervalMs = (BYTE)((g_TargetFPS > 0) ? (1000 / g_TargetFPS) : 6);
             if (minIntervalMs < 1) minIntervalMs = 1;
@@ -676,6 +801,7 @@ static void ApplySnippingToolPatches() {
                 pMath[6] = 0x90; // nop
                 VirtualProtect(pMath, 7, oldProt, &oldProt);
                 FlushInstructionCache(GetCurrentProcess(), pMath, 7);
+                appliedMask |= 0x02;
                 Log("[SnippingToolHighFPS] [OK] Patch 2 applied: Frame Interval Math = %u ms at 0x%p", minIntervalMs, pMath);
             }
         } else {
@@ -686,13 +812,16 @@ static void ApplySnippingToolPatches() {
     // -------------------------------------------------------------
     // PATCH 3: IMediaRatio FrameRate Override (0x140085e20)
     // Pattern: c7 44 24 20 af 03 00 00 48 8b 01 48 8b 40 38
-    // Function start is at pattern - 0x2f
+    // Uses RtlLookupFunctionEntry for 100% resilient function entry resolution!
     // -------------------------------------------------------------
     if (g_EnableEncoderUnlock) {
         const BYTE p3[] = { 0xC7, 0x44, 0x24, 0x20, 0xAF, 0x03, 0x00, 0x00, 0x48, 0x8B, 0x01, 0x48, 0x8B, 0x40, 0x38 };
         BYTE* match3 = FindPattern(textBase, textSize, p3, sizeof(p3));
         if (match3) {
-            BYTE* funcStart = match3 - 0x2F;
+            DWORD64 imgBase = 0;
+            PRUNTIME_FUNCTION pRt = RtlLookupFunctionEntry((DWORD64)match3, &imgBase, NULL);
+            BYTE* funcStart = pRt ? ((BYTE*)imgBase + pRt->BeginAddress) : (match3 - 0x2F);
+
             DWORD oldProt;
             if (VirtualProtect(funcStart, 14, PAGE_EXECUTE_READWRITE, &oldProt)) {
                 ULONG_PTR pHook = (ULONG_PTR)MediaRatioHook;
@@ -710,7 +839,8 @@ static void ApplySnippingToolPatches() {
                 memcpy(funcStart, jmp14, 14);
                 VirtualProtect(funcStart, 14, oldProt, &oldProt);
                 FlushInstructionCache(GetCurrentProcess(), funcStart, 14);
-                Log("[SnippingToolHighFPS] [OK] Patch 3 applied: MediaRatioHook placed at 0x%p -> 0x%p", funcStart, (void*)pHook);
+                appliedMask |= 0x04;
+                Log("[SnippingToolHighFPS] [OK] Patch 3 applied: MediaRatioHook placed at 0x%p (SEH Entry resolved) -> 0x%p", funcStart, (void*)pHook);
             }
         } else {
             Log("[SnippingToolHighFPS] [WARN] Patch 3 pattern not found");
@@ -720,7 +850,7 @@ static void ApplySnippingToolPatches() {
     // -------------------------------------------------------------
     // PATCH 4: StartCapture Compositor Unlock Wrapper Hook
     // Pattern: 48 8b 01 48 8b 08 48 8b 01 48 8b 40 30
-    // Wrapper start is at pattern - 0x22 (sub rsp, 0x38)
+    // Uses RtlLookupFunctionEntry for 100% resilient wrapper entry resolution!
     // -------------------------------------------------------------
     if (g_EnableCompositorUnlock) {
         const BYTE p4[] = { 0x48, 0x8B, 0x01, 0x48, 0x8B, 0x08, 0x48, 0x8B, 0x01, 0x48, 0x8B, 0x40, 0x30 };
@@ -732,12 +862,14 @@ static void ApplySnippingToolPatches() {
             BYTE* match4 = FindPattern(searchPtr, searchRemaining, p4, sizeof(p4));
             if (!match4) break;
 
-            BYTE* funcStart = match4 - 0x22;
+            DWORD64 imgBase = 0;
+            PRUNTIME_FUNCTION pRt = RtlLookupFunctionEntry((DWORD64)match4, &imgBase, NULL);
+            BYTE* funcStart = pRt ? ((BYTE*)imgBase + pRt->BeginAddress) : (match4 - 0x22);
+
             DWORD oldProt;
             if (VirtualProtect(funcStart, 14, PAGE_EXECUTE_READWRITE, &oldProt)) {
                 ULONG_PTR pHook = (ULONG_PTR)StartCaptureHook;
 
-                // 14-byte indirect jump: FF 25 00 00 00 00 <64-bit target>
                 BYTE jmp14[14] = {
                     0xFF, 0x25, 0x00, 0x00, 0x00, 0x00,
                     (BYTE)(pHook & 0xFF),
@@ -754,19 +886,23 @@ static void ApplySnippingToolPatches() {
                 VirtualProtect(funcStart, 14, oldProt, &oldProt);
                 FlushInstructionCache(GetCurrentProcess(), funcStart, 14);
                 patch4Count++;
-                Log("[SnippingToolHighFPS] [OK] Patch 4 applied: StartCaptureHook placed at 0x%p", funcStart);
+                Log("[SnippingToolHighFPS] [OK] Patch 4 applied: StartCaptureHook placed at 0x%p (SEH Entry resolved)", funcStart);
             }
 
             searchRemaining -= (match4 + sizeof(p4) - searchPtr);
             searchPtr = match4 + sizeof(p4);
         }
 
-        if (patch4Count == 0) {
+        if (patch4Count > 0) {
+            appliedMask |= 0x08;
+        } else {
             Log("[SnippingToolHighFPS] [WARN] Patch 4 pattern not found");
         }
     }
 
-    Log("[SnippingToolHighFPS] All patches applied successfully in SnippingTool.exe!");
+    g_PatchStatusMask = appliedMask;
+    PublishPatchStatus(appliedMask, expectedMask);
+    Log("[SnippingToolHighFPS] Patch summary: mask=0x%X (expected=0x%X)", appliedMask, expectedMask);
 }
 
 extern "C" __declspec(dllexport) LRESULT CALLBACK MsgHookProc(int code, WPARAM wParam, LPARAM lParam) {
@@ -775,12 +911,24 @@ extern "C" __declspec(dllexport) LRESULT CALLBACK MsgHookProc(int code, WPARAM w
 
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
     if (fdwReason == DLL_PROCESS_ATTACH) {
+        InitializeCriticalSection(&g_csLock);
+        g_csInitialized = 1;
         DisableThreadLibraryCalls(hinstDLL);
+
+        // Pin module in target process so hooked WinRT vtables stay valid for lifetime
+        HMODULE hPinned = NULL;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                           (LPCWSTR)hinstDLL, &hPinned);
+
         LoadConfig(hinstDLL);
         ApplySnippingToolPatches();
     } else if (fdwReason == DLL_PROCESS_DETACH) {
         HideRecordingHUD();
         DisableMMCSS();
+        if (g_csInitialized) {
+            g_csInitialized = 0;
+            DeleteCriticalSection(&g_csLock);
+        }
     }
     return TRUE;
 }

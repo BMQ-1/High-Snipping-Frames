@@ -2,13 +2,24 @@
 
 1 ICON "../assets/icon.ico"
 
+#ifdef BUILD_GUI
+#ifndef RT_MANIFEST
+#define RT_MANIFEST 24
+#endif
+1 RT_MANIFEST "app.manifest"
+#endif
+
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION     1,1,0,0
-PRODUCTVERSION  1,1,0,0
+FILEVERSION     1,2,0,0
+PRODUCTVERSION  1,2,0,0
 FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
 FILEFLAGS       0
 FILEOS          VOS_NT_WINDOWS32
+#ifdef BUILD_GUI
 FILETYPE        VFT_APP
+#else
+FILETYPE        VFT_DLL
+#endif
 FILESUBTYPE     VFT2_UNKNOWN
 BEGIN
     BLOCK "StringFileInfo"
@@ -16,13 +27,18 @@ BEGIN
         BLOCK "040904b0"
         BEGIN
             VALUE "CompanyName",      "High Snipping Frames Project"
-            VALUE "FileDescription",  "High Snipping Frames"
-            VALUE "FileVersion",      "1.1.0.0"
+#ifdef BUILD_GUI
+            VALUE "FileDescription",  "High Snipping Frames Control Center"
+            VALUE "OriginalFilename", "HighSnippingFramesGUI.exe"
+#else
+            VALUE "FileDescription",  "High Snipping Frames Capture Hook Engine"
+            VALUE "OriginalFilename", "SnippingToolHighFPS.dll"
+#endif
+            VALUE "FileVersion",      "1.2.0.0"
             VALUE "InternalName",     "HighSnippingFrames"
             VALUE "LegalCopyright",   "MIT License 2026"
-            VALUE "OriginalFilename", "HighSnippingFrames.exe"
             VALUE "ProductName",      "High Snipping Frames"
-            VALUE "ProductVersion",   "1.1.0.0"
+            VALUE "ProductVersion",   "1.2.0.0"
         END
     END
     BLOCK "VarFileInfo"

@@ -1,4 +1,4 @@
-# High Snipping Frames - Release Packaging Script
+# High Snipping Frames - Release Packaging Script v1.2
 # Generates a standalone, ready-to-publish GitHub Release ZIP
 
 $ErrorActionPreference = "Stop"
@@ -7,10 +7,10 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $repoDir = Split-Path -Parent $scriptDir
 $distDir = Join-Path $repoDir "dist"
 $tempStageDir = Join-Path $distDir "High-Snipping-Frames-Portable"
-$zipOutput = Join-Path $distDir "High-Snipping-Frames-v1.1-Portable.zip"
+$zipOutput = Join-Path $distDir "High-Snipping-Frames-v1.2-Portable.zip"
 
 Write-Host "=======================================================" -ForegroundColor Cyan
-Write-Host "       High Snipping Frames - Packaging Release        " -ForegroundColor Cyan
+Write-Host "       High Snipping Frames - Packaging Release v1.2   " -ForegroundColor Cyan
 Write-Host "=======================================================" -ForegroundColor Cyan
 
 # Ensure dist directories are fresh
@@ -24,9 +24,7 @@ New-Item -ItemType Directory -Path $binStage -Force | Out-Null
 $binFiles = @(
     "HighSnippingFramesGUI.exe",
     "SnippingToolHighFPS.dll",
-    "SnippingToolHighFPS.ini",
-    "SnippingToolDaemon.exe",
-    "SnippingToolLauncher.exe"
+    "SnippingToolHighFPS.ini"
 )
 
 foreach ($f in $binFiles) {
@@ -45,7 +43,7 @@ Copy-Item (Join-Path $repoDir "LICENSE") -Destination (Join-Path $tempStageDir "
 # Quick Start README for the ZIP
 $txtReadme = @"
 ===============================================================
-       High Snipping Frames - 60 / 120 / 144+ FPS Suite
+       High Snipping Frames v1.2 - 60 / 120 / 144+ FPS Suite
 ===============================================================
 
 HOW TO USE (1-CLICK SETUP):
@@ -56,11 +54,16 @@ HOW TO USE (1-CLICK SETUP):
 
 The High Snipping Frames icon is now in your System Tray,
 and Windows Snipping Tool will now record in ultra-smooth
-high framerates (60, 120, 144+ FPS) natively!
+high framerates (60, 120, 144+ FPS) natively with optimized,
+shareable video file sizes!
+
+PORTABLE MODE:
+- You can also run 'bin\HighSnippingFramesGUI.exe' directly
+  from any folder without installing!
 
 TO UNINSTALL:
 - Double-click 'uninstall.bat' at any time to restore Windows
-  Snipping Tool back to stock settings.
+  Snipping Tool back to factory stock settings.
 
 GitHub Repository:
 https://github.com/BMQ-1/High-Snipping-Frames
@@ -69,7 +72,7 @@ https://github.com/BMQ-1/High-Snipping-Frames
 Set-Content -Path (Join-Path $tempStageDir "QUICK_START.txt") -Value $txtReadme -Encoding UTF8
 
 Write-Host "[3/4] Creating ZIP archive..." -ForegroundColor Yellow
-Compress-Archive -Path "$tempStageDir\*" -DestinationPath $zipOutput -CompressionLevel Optimal
+Compress-Archive -Path "$tempStageDir\*" -DestinationPath $zipOutput -CompressionLevel Optimal
 Copy-Item (Join-Path (Join-Path $repoDir "bin") "HighSnippingFramesGUI.exe") -Destination (Join-Path $distDir "HighSnippingFramesGUI.exe") -Force
 
 Write-Host "[4/4] Cleaning up staging folder..." -ForegroundColor Yellow

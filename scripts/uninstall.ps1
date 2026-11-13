@@ -1,10 +1,10 @@
-# High Snipping Frames - Uninstaller Script
+# High Snipping Frames - Uninstaller Script v1.2
 
 Write-Host "=======================================================" -ForegroundColor Cyan
-Write-Host "       High Snipping Frames - Uninstaller              " -ForegroundColor Cyan
+Write-Host "       High Snipping Frames - Uninstaller v1.2          " -ForegroundColor Cyan
 Write-Host "=======================================================" -ForegroundColor Cyan
 
-Write-Host "[1/4] Stopping processes..." -ForegroundColor Yellow
+Write-Host "[1/5] Stopping processes..." -ForegroundColor Yellow
 Stop-Process -Name "SnippingToolDaemon", "HighSnippingFramesGUI" -Force -ErrorAction SilentlyContinue
 
 Write-Host "[2/5] Removing autostart registry entries..." -ForegroundColor Yellow
@@ -31,12 +31,16 @@ if (Test-Path $shortcutPath) {
     Remove-Item -Path $shortcutPath -Force -ErrorAction SilentlyContinue
 }
 
-Write-Host "[5/5] Removing installed files..." -ForegroundColor Yellow
-$installDirs = @("C:\Program Files\SnippingToolHighFPS", (Join-Path $env:LOCALAPPDATA "HighSnippingFrames"))
+Write-Host "[5/5] Removing installed files and data..." -ForegroundColor Yellow
+$installDirs = @(
+    "C:\Program Files\SnippingToolHighFPS",
+    "C:\ProgramData\SnippingToolHighFPS",
+    (Join-Path $env:LOCALAPPDATA "HighSnippingFrames")
+)
 foreach ($dir in $installDirs) {
     if (Test-Path $dir) {
         Remove-Item -Path $dir -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
-Write-Host "`nUninstalled successfully. Windows Snipping Tool restored to default." -ForegroundColor Green
+Write-Host "`nUninstalled successfully. Windows Snipping Tool restored to factory default." -ForegroundColor Green

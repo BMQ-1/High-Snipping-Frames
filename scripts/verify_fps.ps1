@@ -2,10 +2,12 @@
 
 Write-Host "Searching for latest Snipping Tool video recording..." -ForegroundColor Cyan
 
+$videosShell = [Environment]::GetFolderPath('MyVideos')
 $searchDirs = @(
+    (Join-Path $videosShell "Screen Recordings"),
     (Join-Path $env:USERPROFILE "Videos\Screen Recordings"),
     (Join-Path $env:LOCALAPPDATA "Packages\Microsoft.ScreenSketch_8wekyb3d8bbwe\TempState\Recordings")
-)
+) | Select-Object -Unique
 
 $latest = Get-ChildItem -Path $searchDirs -Filter "*.mp4" -ErrorAction SilentlyContinue | 
           Sort-Object LastWriteTime -Descending | 

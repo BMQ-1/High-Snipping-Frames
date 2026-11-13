@@ -20,36 +20,32 @@ if %ERRORLEVEL% neq 0 (
 
 if not exist "..\bin" mkdir "..\bin"
 
-echo [1/5] Compiling resources and icon...
-windres ..\src\resource.rc -O coff -o ..\src\resource.res
+echo [1/3] Compiling embedded resources and application icon...
+windres ..\src\resource.rc -O coff -o ..\src\dll_res.res
 if %ERRORLEVEL% neq 0 (
-    echo Failed to compile resources.
+    echo Failed to compile DLL resources.
+    exit /b 1
+)
+windres -DBUILD_GUI ..\src\resource.rc -O coff -o ..\src\gui_res.res
+if %ERRORLEVEL% neq 0 (
+    echo Failed to compile GUI resources.
     exit /b 1
 )
 
-echo [2/5] Compiling SnippingToolHighFPS.dll...
-g++ -O2 -shared -o ..\bin\SnippingToolHighFPS.dll ..\src\SnippingToolHighFPS.cpp ..\src\resource.res -lole32 -luuid -lgdi32 -static -s
+echo [2/3] Compiling SnippingToolHighFPS.dll (In-Memory Kernel Patcher)...
+g++ -O2 -shared -o ..\bin\SnippingToolHighFPS.dll ..\src\SnippingToolHighFPS.cpp ..\src\dll_res.res -lole32 -luuid -lgdi32 -static -s
 if %ERRORLEVEL% neq 0 (
     echo Failed to build SnippingToolHighFPS.dll
     exit /b 1
 )
 
-echo [3/5] Compiling SnippingToolDaemon.exe...
-g++ -O2 -mwindows -municode -o ..\bin\SnippingToolDaemon.exe ..\src\SnippingToolDaemon.cpp ..\src\resource.res -static -s
+echo [3/3] Compiling HighSnippingFramesGUI.exe (Unified Control Center, Tray ^& Watcher)...
+g++ -O2 -mwindows -municode -o ..\bin\HighSnippingFramesGUI.exe ..\src\HighSnippingFramesGUI.cpp ..\src\gui_res.res -lgdiplus -ldwmapi -lshell32 -lole32 -ladvapi32 -static -s
 if %ERRORLEVEL% neq 0 (
-    echo Failed to build SnippingToolDaemon.exe
+    echo Failed to build HighSnippingFramesGUI.exe
     exit /b 1
 )
-
-echo [4/5] Compiling SnippingToolLauncher.exe...
-g++ -O2 -mwindows -municode -o ..\bin\SnippingToolLauncher.exe ..\src\SnippingToolLauncher.cpp ..\src\resource.res -static -s
-if %ERRORLEVEL% neq 0 (
-    echo Failed to build SnippingToolLauncher.exe
-    exit /b 1
-)
-
-echo [5/5] Compiling HighSnippingFramesGUI.exe (Native Modern UI ^& Tray App)...
-g++ -O2 -mwindows -municode -o ..\bin\HighSnippingFramesGUI.exe ..\src\HighSnippingFramesGUI.cpp ..\src\resource.res -lgdiplus -ldwmapi -lshell32 -lole32 -static -s
+del /q ..\src\dll_res.res ..\src\gui_res.res 2>nul
 if %ERRORLEVEL% neq 0 (
     echo Failed to build HighSnippingFramesGUI.exe
     exit /b 1
@@ -57,5 +53,5 @@ if %ERRORLEVEL% neq 0 (
 
 echo.
 echo =======================================================
-echo  Build successful! All 4 binaries created in ..\bin\
+echo  Build successful! Core binaries generated in ..\bin\
 echo =======================================================
