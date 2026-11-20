@@ -21,9 +21,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\install.ps1"
 if %errorlevel% equ 0 (
     echo.
     echo =======================================================
-    echo  [SUCCESS] High Snipping Frames is active!
-    echo  - Controls: Double-click the tray icon near your clock.
-    echo  - Recording: Open Snipping Tool (or press Win+Shift+S)
+    echo  [SUCCESS] High Snipping Frames v2.0 is active!
+    echo  - Controls: Left-click the tray icon near your clock.
+    echo  - Recording: Open Snipping Tool (or press Ctrl+Alt+R)
     echo    and record at 60 / 120 / 144+ FPS natively!
     echo =======================================================
 ) else (

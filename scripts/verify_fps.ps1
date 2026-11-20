@@ -21,6 +21,11 @@ if (-not $latest) {
 Write-Host "Latest Recording: $($latest.FullName)" -ForegroundColor Green
 Write-Host "File Size: $([math]::Round($latest.Length / 1MB, 2)) MB" -ForegroundColor Gray
 Write-Host "Recorded:  $($latest.LastWriteTime)" -ForegroundColor Gray
+if (-not (Get-Command ffprobe -ErrorAction SilentlyContinue)) {
+    Write-Host "ffprobe (FFmpeg) was not found in PATH. Install FFmpeg to inspect video metadata." -ForegroundColor Yellow
+    exit 0
+}
+
 Write-Host "`nRunning ffprobe frame analysis..." -ForegroundColor Cyan
 
 $probe = ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate,avg_frame_rate,nb_frames,duration,width,height -of default=noprint_wrappers=1:nokey=0 "$($latest.FullName)"

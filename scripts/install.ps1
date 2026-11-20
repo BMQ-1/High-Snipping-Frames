@@ -1,111 +1,76 @@
-# High Snipping Frames - Installer Script v1.2
-# Installs unified Control Center GUI (with integrated zero-CPU injector & real-time clipboard engine)
+# High Snipping Frames v2.0 Installer
+param([switch]$Elevated)
 
 $ErrorActionPreference = "Stop"
+$RepoRoot   = Split-Path -Parent $PSScriptRoot
+$BinDir     = Join-Path $RepoRoot "bin"
+$InstallDir = Join-Path $env:ProgramFiles "SnippingToolHighFPS"
+$DataDir    = Join-Path $env:ProgramData "SnippingToolHighFPS"
 
-Write-Host "=======================================================" -ForegroundColor Cyan
-Write-Host "       High Snipping Frames - Installer v1.2           " -ForegroundColor Cyan
-Write-Host "=======================================================" -ForegroundColor Cyan
+Write-Host "=====================================================" -ForegroundColor Cyan
+Write-Host "  High Snipping Frames v2.0 - Installer" -ForegroundColor Cyan
+Write-Host "=====================================================" -ForegroundColor Cyan
 
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
-$repoDir = Split-Path -Parent $scriptDir
-$binDir = Join-Path $repoDir "bin"
-
-$installDir = "C:\Program Files\SnippingToolHighFPS"
-$progDataDir = "C:\ProgramData\SnippingToolHighFPS"
-$isElevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-
-if (-not (Test-Path $installDir)) {
-    if ($isElevated) {
-        New-Item -ItemType Directory -Path $installDir -Force | Out-Null
-    } else {
-        $installDir = Join-Path $env:LOCALAPPDATA "HighSnippingFrames"
-        New-Item -ItemType Directory -Path $installDir -Force | Out-Null
-    }
+# Self-elevate cleanly if needed
+$principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Host "Requesting Administrator privileges to install to Program Files..." -ForegroundColor Yellow
+    $argList = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Elevated"
+    Start-Process -FilePath "powershell.exe" -ArgumentList $argList -Verb RunAs -Wait
+    exit 0
 }
 
-if (-not (Test-Path $progDataDir)) {
-    New-Item -ItemType Directory -Path $progDataDir -Force | Out-Null
+# Stop running instances cleanly before replacing binaries
+Get-Process -Name "HighSnippingFramesGUI" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Get-Process -Name "SnippingTool" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 300
+
+# Create install and data directories
+New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
+
+# Remove any legacy IFEO registry entries from older v1.0 installs
+$ifeoPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\SnippingTool.exe"
+if (Test-Path $ifeoPath) {
+    Remove-Item -Path $ifeoPath -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Write-Host "[1/6] Stopping any running instances..." -ForegroundColor Yellow
-Stop-Process -Name "SnippingToolDaemon", "HighSnippingFramesGUI", "SnippingTool" -Force -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 600
+# Copy binaries
+Copy-Item (Join-Path $BinDir "SnippingToolHighFPS.dll")   (Join-Path $InstallDir "SnippingToolHighFPS.dll")   -Force
+Copy-Item (Join-Path $BinDir "HighSnippingFramesGUI.exe") (Join-Path $InstallDir "HighSnippingFramesGUI.exe") -Force
 
-Write-Host "[2/6] Deploying unified binaries..." -ForegroundColor Yellow
-$filesToDeploy = @(
-    "SnippingToolHighFPS.dll",
-    "HighSnippingFramesGUI.exe"
-)
-
-foreach ($f in $filesToDeploy) {
-    Copy-Item (Join-Path $binDir $f) -Destination (Join-Path $installDir $f) -Force
+$TargetIni = Join-Path $DataDir "SnippingToolHighFPS.ini"
+if (-not (Test-Path $TargetIni)) {
+    Copy-Item (Join-Path $BinDir "SnippingToolHighFPS.ini") $TargetIni -Force
 }
+# Remove any legacy INI beside Program Files EXE so ProgramData remains the single source of truth
+$LegacyInstallIni = Join-Path $InstallDir "SnippingToolHighFPS.ini"
+if (Test-Path $LegacyInstallIni) { Remove-Item $LegacyInstallIni -Force -ErrorAction SilentlyContinue }
 
-# Remove any legacy v1.0/v1.1 executables or shadowing INI from Program Files
-foreach ($legacy in @("SnippingToolHighFPS.ini", "SnippingToolDaemon.exe", "SnippingToolLauncher.exe")) {
-    $legacyPath = Join-Path $installDir $legacy
-    if (Test-Path $legacyPath) { Remove-Item $legacyPath -Force -ErrorAction SilentlyContinue }
-}
+# Grant Store AppContainer (*S-1-15-2-1) read/execute on install folder and write on ProgramData logs/status
+& icacls $InstallDir /grant "*S-1-15-2-1:(OI)(CI)RX" "Users:(OI)(CI)RX" | Out-Null
+& icacls $DataDir    /grant "*S-1-15-2-1:(OI)(CI)M"  "Users:(OI)(CI)M"  | Out-Null
 
-# Deploy writable default INI to ProgramData if not present
-if (-not (Test-Path (Join-Path $progDataDir "SnippingToolHighFPS.ini"))) {
-    Copy-Item (Join-Path $binDir "SnippingToolHighFPS.ini") -Destination (Join-Path $progDataDir "SnippingToolHighFPS.ini") -Force
-}
-# Ensure standard users and UWP AppContainer can read/write ProgramData runtime config & patch status
-icacls $progDataDir /grant "BUILTIN\Users:(OI)(CI)M" /grant "*S-1-15-2-1:(OI)(CI)RX" /T /Q | Out-Null
+# Create Start Menu shortcut
+$StartMenu = Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs"
+$ShortcutPath = Join-Path $StartMenu "High Snipping Frames.lnk"
+$WshShell = New-Object -ComObject WScript.Shell
+$Shortcut = $WshShell.CreateShortcut($ShortcutPath)
+$Shortcut.TargetPath = Join-Path $InstallDir "HighSnippingFramesGUI.exe"
+$Shortcut.WorkingDirectory = $InstallDir
+$Shortcut.Description = "High Snipping Frames Control Center"
+$Shortcut.Save()
 
-Write-Host "[3/6] Purging legacy IFEO hooks to ensure instant shortcuts..." -ForegroundColor Yellow
-$ifeoKeys = @(
-    "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\SnippingTool.exe",
-    "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\ScreenClippingHost.exe",
-    "HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\SnippingTool.exe"
-)
-foreach ($ik in $ifeoKeys) {
-    if (Test-Path $ik) {
-        Remove-ItemProperty -Path $ik -Name "Debugger" -ErrorAction SilentlyContinue
-    }
-}
+# Configure user startup entry (--minimized for silent boot)
+$RunKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+New-ItemProperty -Path $RunKey -Name "HighSnippingFrames" -Value "`"$(Join-Path $InstallDir 'HighSnippingFramesGUI.exe')`" --minimized" -PropertyType String -Force | Out-Null
 
-Write-Host "[4/6] Configuring security and AppContainer permissions..." -ForegroundColor Yellow
-icacls (Join-Path $installDir "*") /grant "ALL APPLICATION PACKAGES:(OI)(CI)RX" /t 2>$null | Out-Null
-icacls $progDataDir /grant "ALL APPLICATION PACKAGES:(OI)(CI)RX" /t 2>$null | Out-Null
-icacls $progDataDir /grant "BUILTIN\Users:(OI)(CI)M" /t 2>$null | Out-Null
+# Launch Control Center silently in the user desktop session
+$GuiExe = Join-Path $InstallDir "HighSnippingFramesGUI.exe"
+Start-Process -FilePath $GuiExe -ArgumentList "--minimized" -WorkingDirectory $InstallDir
 
-$packageLocalState = Join-Path $env:LOCALAPPDATA "Packages\Microsoft.ScreenSketch_8wekyb3d8bbwe\LocalState"
-if (Test-Path $packageLocalState) {
-    icacls $packageLocalState /grant "ALL APPLICATION PACKAGES:(OI)(CI)M" /t 2>$null | Out-Null
-}
-
-Write-Host "[5/6] Creating Start Menu shortcut..." -ForegroundColor Yellow
-try {
-    $wsShell = New-Object -ComObject WScript.Shell
-    $startMenuDir = [Environment]::GetFolderPath('Programs')
-    $shortcutPath = Join-Path $startMenuDir "High Snipping Frames.lnk"
-    $guiExe = Join-Path $installDir "HighSnippingFramesGUI.exe"
-    $shortcut = $wsShell.CreateShortcut($shortcutPath)
-    $shortcut.TargetPath = $guiExe
-    $shortcut.WorkingDirectory = $installDir
-    $shortcut.Description = "High Snipping Frames - Control Center"
-    $shortcut.IconLocation = "$guiExe,0"
-    $shortcut.Save()
-    Write-Host "      Created shortcut at: $shortcutPath" -ForegroundColor Gray
-} catch {
-    Write-Host "      Could not create shortcut (skipping)" -ForegroundColor Gray
-}
-
-Write-Host "[6/6] Configuring auto-start in HKCU Run..." -ForegroundColor Yellow
-$guiExe = Join-Path $installDir "HighSnippingFramesGUI.exe"
-
-# Clean up legacy dual-process startup entries
-Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "SnippingToolHighFPSDaemon" -ErrorAction SilentlyContinue
-Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "HighSnippingFramesGUI" -ErrorAction SilentlyContinue
-
-# Register unified single-instance Control Center
-Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "HighSnippingFrames" -Value ('"' + $guiExe + '" --minimized')
-
-# Launch unified Control Center detached from script
-([wmiclass]"win32_process").Create('"' + $guiExe + '" --minimized') | Out-Null
-
-Write-Host "`nHigh Snipping Frames v1.2 installed and launched successfully!" -ForegroundColor Green
-Write-Host "Unified engine is active in your System Tray and Start Menu." -ForegroundColor Green
+Write-Host ""
+Write-Host "[OK] High Snipping Frames v2.0 installed!" -ForegroundColor Green
+Write-Host "  - Location: $InstallDir" -ForegroundColor Gray
+Write-Host "  - Settings: $TargetIni" -ForegroundColor Gray
+Write-Host "  - Running silently in System Tray." -ForegroundColor Gray
